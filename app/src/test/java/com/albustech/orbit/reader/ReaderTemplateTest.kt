@@ -3,6 +3,7 @@ package com.albustech.orbit.reader
 import com.albustech.orbit.data.ReaderStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,34 +17,32 @@ class ReaderTemplateTest {
         lang = "en-GB",
         dir = "ltr",
         words = 1320,
-        content = "<p>Body with {{TITLE}} literally in it</p>",
+        content = "<p>Body with <b>markup</b></p>",
     )
 
-    private fun build(template: String, anchor: Anchor? = null) = ReaderTemplate.build(
-        template, css = "body{}", script = "run()", article = article,
-        diameterCss = 240f, squareCss = 169.7056f, insetCss = 35.1472f,
-        style = ReaderStyle(fontSize = 16, lineHeight = 1.5f, serif = false),
-        anchor = anchor, nonce = "abc",
+    private fun payload(a: Article = article, anchor: Anchor? = null) = ReaderTemplate.payload(
+        a, diameterCss = 240f, squareCss = 169.7056f, insetCss = 35.1472f,
+        style = ReaderStyle(fontSize = 16, lineHeight = 1.5f, serif = false), anchor = anchor,
     )
 
     @Test
-    fun `placeholders are filled once and content is not re-scanned`() {
-        val html = build("<html lang=\"{{LANG}}\" dir=\"{{DIR}}\"><t>{{TITLE}}</t><m>{{META}}</m>{{CONTENT}}<s n=\"{{NONCE}}\">{{SCRIPT}}</s>")
-        assertTrue(html.contains("lang=\"en-GB\""))
-        assertTrue(html.contains("dir=\"ltr\""))
-        assertTrue(html.contains("<t>Cats &amp; &lt;Dogs&gt;</t>"))
-        assertTrue(html.contains("<p>Body with {{TITLE}} literally in it</p>"))
-        assertTrue(html.contains("<s n=\"abc\">run()</s>"))
-        assertTrue(html.contains("<m>By Ann · Example · 6 min read</m>"))
+    fun `payload carries escaped header, untouched content and config`() {
+        val p = payload(anchor = Anchor(3, 42))
+        assertEquals("en-GB", p.getString("lang"))
+        assertEquals("ltr", p.getString("dir"))
+        assertEquals("Cats & <Dogs>", p.getString("title")) // document.title is text, not HTML
+        val html = p.getString("html")
+        assertTrue(html.contains("<h1 class=\"orbit-title\">Cats &amp; &lt;Dogs&gt;</h1>"))
+        assertTrue(html.contains("<p class=\"orbit-meta\">By Ann · Example · 6 min read</p>"))
+        assertTrue(html.endsWith("<p>Body with <b>markup</b></p>"))
+        assertEquals(42, p.getJSONObject("config").getJSONObject("anchor").getInt("w"))
     }
 
     @Test
     fun `bad lang and dir are dropped`() {
-        val html = ReaderTemplate.build(
-            "{{LANG}}|{{DIR}}", "", "", article.copy(lang = "en\" onload=\"x", dir = "sideways"),
-            240f, 170f, 35f, ReaderStyle(), null, "n",
-        )
-        assertEquals("|auto", html)
+        val p = payload(article.copy(lang = "en\" onload=\"x", dir = "sideways"))
+        assertEquals("", p.getString("lang"))
+        assertEquals("auto", p.getString("dir"))
     }
 
     @Test
@@ -56,8 +55,14 @@ class ReaderTemplateTest {
     }
 
     @Test
-    fun `base url carries the marker`() {
-        assertEquals("https://example.com/story#orbit-reader", ReaderTemplate.baseUrl(article.url))
+    fun `reader page urls round-trip the article`() {
+        val base = "moz-extension://1234-abcd/"
+        val page = ReaderTemplate.pageUrl(base, "https://example.com/a?b=1&c=2#x", "t9")
+        assertEquals("moz-extension://1234-abcd/reader.html#u=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1%26c%3D2%23x&t=t9", page)
+        assertEquals("https://example.com/a?b=1&c=2#x", ReaderTemplate.articleOf(page, base))
+        assertNull(ReaderTemplate.articleOf("https://example.com/reader.html#u=x", base))
+        assertNull(ReaderTemplate.articleOf("moz-extension://1234-abcd/reader.html#u=javascript%3Aalert(1)", base))
+        assertNull(ReaderTemplate.articleOf(page, null))
     }
 
     @Test

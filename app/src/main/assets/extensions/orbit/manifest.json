@@ -1,0 +1,27 @@
+{
+  "manifest_version": 2,
+  "name": "Orbit",
+  "version": "1.0",
+  "description": "Orbit's round-screen layout, reader, link focus and search cards, inside GeckoView.",
+  "browser_specific_settings": {
+    "gecko": { "id": "orbit@albustech.com" }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "geckoViewAddons",
+    "tabs",
+    "webRequest",
+    "webRequestBlocking",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": { "scripts": ["background.js"] },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

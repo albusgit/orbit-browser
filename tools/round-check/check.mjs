@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /*
  * Round-check: loads fixture pages in headless Chromium sized like the Watch6 Classic,
- * injects round.css/round.js the same way Injector.kt does (at document start, with
+ * injects round.css/round.js the same way the Orbit extension does (at document start, with
  * window.__orbit geometry), and checks that no text is cut off by the circle:
  *
  *   1. Horizontally, every visible text line lies inside the inscribed-square column.
@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const assets = path.resolve(here, '../../app/src/main/assets');
+const assets = path.resolve(here, '../../app/src/main/assets/extensions/orbit');
 const outDir = path.join(here, 'out');
 
 const SCREENS_PX = [432, 480]; // Watch6 Classic 43mm, 47mm
@@ -31,7 +31,7 @@ const TOLERANCE = 0.75; // CSS px, for sub-pixel rounding
 const css = await readFile(path.join(assets, 'round.css'), 'utf8');
 const js = await readFile(path.join(assets, 'round.js'), 'utf8');
 
-/** Same geometry and script shape as RoundGeometry.kt + Injector.kt. */
+/** Same geometry and script shape as RoundGeometry.kt + background.js. */
 function geometry(px, density) {
   const d = px / density;
   const sq = d / Math.SQRT2;

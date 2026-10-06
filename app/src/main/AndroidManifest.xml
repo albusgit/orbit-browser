@@ -10,10 +10,6 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <queries>
-        <!-- WebView providers, to tell "disabled" from "not installed" when WebView won't start. -->
-        <package android:name="com.google.android.webview" />
-        <package android:name="com.android.webview" />
-        <package android:name="com.android.chrome" />
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>
@@ -35,15 +31,7 @@
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
 
-        <!-- No Safe Browsing lookups and no WebView usage metrics uploads. -->
-        <meta-data
-            android:name="android.webkit.WebView.EnableSafeBrowsing"
-            android:value="false" />
-        <meta-data
-            android:name="android.webkit.WebView.MetricsOptOut"
-            android:value="true" />
-
-        <!-- configChanges: the single WebView must survive anything the watch can throw at us. -->
+        <!-- configChanges: the one GeckoSession must survive anything the watch can throw at us. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale"

@@ -156,9 +156,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
         bezel.onCenterTap = { overlays.add(Overlay.Ring) }
         bezel.onCenterLongPress = { cycleBezelState() }
         bezel.onLinkLongPress = { url, title -> overlays.add(Overlay.Link(url, title)) }
-        bezel.onDoubleTap = c::onDoubleTap
         onDispose {
-            bezel.onDoubleTap = {}
             bezel.onDetents = { _, _ -> }
             bezel.onInteraction = {}
             bezel.onCenterTap = {}
@@ -220,7 +218,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
                 .focusable(),
         ) {
             AndroidView(
-                factory = { c.webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
+                factory = { c.view.also { (it.parent as? ViewGroup)?.removeView(it) } },
                 update = { it.visibility = if (onPage) View.VISIBLE else View.INVISIBLE },
                 modifier = Modifier.fillMaxSize(),
             )

@@ -3,13 +3,12 @@ package com.albustech.orbit.input
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
-import android.os.Message
 import android.util.Log
 import android.view.GestureDetector
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.View
 import android.view.ViewConfiguration
-import android.webkit.WebView
 import com.albustech.orbit.BuildConfig
 import com.albustech.orbit.ui.RoundGeometry
 import kotlin.math.roundToInt
@@ -18,17 +17,23 @@ import kotlin.math.roundToInt
  * Bezel and touch input for the page.
  *
  * Bezel events normally arrive through Compose (`onRotaryScrollEvent` on the browser root,
- * see BrowserScreen). When the WebView itself holds focus (a form field was tapped) they go
+ * see BrowserScreen). When the GeckoView itself holds focus (a form field was tapped) they go
  * to the view instead, so [attach] listens there too. Whichever path sees an event consumes
  * it, so it is handled once. Detents go to [onDetents]; what they do depends on the bezel mode.
+ *
+ * Gecko has no synchronous hit test, so taps and long presses near the centre wait a moment
+ * for the page's answer: [wasInteractiveTap] (bridge.js saw the tap land on a link or control)
+ * and [hadContextMenu] (Gecko reported a long press on a link). Only if neither came does the
+ * centre gesture open Orbit's ring or switch the bezel mode.
  */
 class BezelInput(
-    private val webView: WebView,
+    private val view: View,
     private val geometry: RoundGeometry,
 ) {
-    private val scrollFactor = ViewConfiguration.get(webView.context).scaledVerticalScrollFactor
+    private val scrollFactor = ViewConfiguration.get(view.context).scaledVerticalScrollFactor
     private val accumulator = DetentAccumulator.forScrollFactor(scrollFactor)
-    val haptics = Haptics(webView)
+    private val handler = Handler(Looper.getMainLooper())
+    val haptics = Haptics(view)
 
     /** Scroll distance per detent in Round Scroll: a quarter of the readable square. */
     val stepPx: Int get() = (geometry.squarePx / 4f).roundToInt().coerceAtLeast(1)
@@ -45,11 +50,14 @@ class BezelInput(
     /** A long press near the centre (not on a link): switch the bezel mode. */
     var onCenterLongPress: () -> Unit = {}
 
-    /** A double tap (Zoom view fits the tapped block into the square). */
-    var onDoubleTap: () -> Unit = {}
-
-    /** A long press on a link: open the radial link menu. */
+    /** A long press on a link (reported by Gecko): open the link wedges. */
     var onLinkLongPress: (url: String, title: String?) -> Unit = { _, _ -> }
+
+    /** True if the page reported the last tap as landing on a link or control. */
+    var wasInteractiveTap: () -> Boolean = { false }
+
+    /** True if Gecko just reported a long press on a link. */
+    var hadContextMenu: () -> Boolean = { false }
 
     /** While false (a menu is open) bezel events pass through to whatever else wants them. */
     var enabled: Boolean = true
@@ -74,61 +82,45 @@ class BezelInput(
 
     @SuppressLint("ClickableViewAccessibility") // We observe touches and never consume them.
     fun attach() {
-        webView.setOnGenericMotionListener { _, ev ->
+        view.setOnGenericMotionListener { _, ev ->
             if (ev.action == MotionEvent.ACTION_SCROLL && ev.isFromSource(InputDevice.SOURCE_ROTARY_ENCODER)) {
                 onRotary(-ev.getAxisValue(MotionEvent.AXIS_SCROLL) * scrollFactor, ev.eventTime)
             } else {
                 false
             }
         }
-        // No text selection or context menu on a watch: long presses are ours.
-        webView.setOnLongClickListener { true }
-        webView.isLongClickable = true
 
-        val gestures = GestureDetector(webView.context, object : GestureDetector.SimpleOnGestureListener() {
+        val gestures = GestureDetector(view.context, object : GestureDetector.SimpleOnGestureListener() {
             override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
                 onInteraction()
                 return false
             }
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                val hit = webView.hitTestResult.type
-                if (hit == WebView.HitTestResult.UNKNOWN_TYPE && geometry.isNearCenter(e.x, e.y)) onCenterTap()
-                return false
-            }
-
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                this@BezelInput.onDoubleTap()
+                if (geometry.isNearCenter(e.x, e.y)) {
+                    handler.postDelayed({ if (!wasInteractiveTap()) onCenterTap() }, PAGE_ANSWER_MS)
+                }
                 return false
             }
 
             override fun onLongPress(e: MotionEvent) {
-                val hit = webView.hitTestResult
-                when (hit.type) {
-                    WebView.HitTestResult.SRC_ANCHOR_TYPE -> hit.extra?.let { onLinkLongPress(it, null) }
-                    WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> requestHref()
-                    else -> if (geometry.isNearCenter(e.x, e.y)) onCenterLongPress()
+                if (geometry.isNearCenter(e.x, e.y)) {
+                    handler.postDelayed({ if (!hadContextMenu()) onCenterLongPress() }, PAGE_ANSWER_MS)
                 }
             }
         })
-        webView.setOnTouchListener { _, ev ->
+        view.setOnTouchListener { _, ev ->
             gestures.onTouchEvent(ev)
             false
         }
     }
 
-    /** For an image inside a link, the href comes asynchronously. */
-    private fun requestHref() {
-        val handler = object : Handler(Looper.getMainLooper()) {
-            override fun handleMessage(msg: Message) {
-                val url = msg.data.getString("url") ?: return
-                onLinkLongPress(url, msg.data.getString("title"))
-            }
-        }
-        webView.requestFocusNodeHref(handler.obtainMessage())
-    }
+    fun detach() = handler.removeCallbacksAndMessages(null)
 
     private companion object {
         const val TAG = "OrbitBezel"
+
+        /** How long a centre gesture waits for the page to say it hit something. */
+        const val PAGE_ANSWER_MS = 180L
     }
 }

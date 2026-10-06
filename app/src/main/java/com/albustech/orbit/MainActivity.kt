@@ -1,18 +1,15 @@
 package com.albustech.orbit
 
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.provider.Settings as SystemSettings
+import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,30 +26,28 @@ import androidx.wear.remote.interactions.RemoteActivityHelper
 import com.albustech.orbit.browser.BrowserController
 import com.albustech.orbit.browser.BrowserHost
 import com.albustech.orbit.browser.ConnectionMonitor
-import com.albustech.orbit.browser.Injector
 import com.albustech.orbit.browser.MemoryLog
-import com.albustech.orbit.browser.OrbitWebView
+import com.albustech.orbit.browser.OrbitRuntime
 import com.albustech.orbit.browser.TabManager
-import com.albustech.orbit.browser.WebViewStart
 import com.albustech.orbit.data.ReaderStyle
 import com.albustech.orbit.data.Settings
 import com.albustech.orbit.input.BezelInput
 import com.albustech.orbit.tile.OrbitTileService
 import com.albustech.orbit.ui.AppActions
 import com.albustech.orbit.ui.BrowserScreen
-import com.albustech.orbit.ui.WebViewProblemScreen
+import com.albustech.orbit.ui.ErrorScreen
 import com.albustech.orbit.ui.OrbitDeps
 import com.albustech.orbit.ui.RoundGeometry
 import kotlinx.coroutines.launch
 
 /**
- * Orbit's single Activity. Owns the one WebView for the app's lifetime (config changes are
+ * Orbit's single Activity. Owns the one GeckoSession for its lifetime (config changes are
  * handled in place, see the manifest), pauses it whenever the screen isn't ours, and handles
- * ambient mode, keep-screen-on and hand-off to the phone.
+ * ambient mode, keep-screen-on and hand-off to the phone. The GeckoRuntime lives in
+ * [OrbitRuntime] for the whole process.
  */
 class MainActivity : ComponentActivity(), BrowserHost, AppActions {
 
-    private var webView: WebView? = null
     private var controller: BrowserController? = null
     private var tabs: TabManager? = null
     private var bezel: BezelInput? = null
@@ -69,17 +64,9 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
                 // Dim black screen; the page and its position stay exactly as they are.
                 ambient = true
                 controller?.pause()
-                webView?.let {
-                    it.onPause()
-                    it.pauseTimers()
-                }
             }
 
             override fun onExitAmbient() {
-                webView?.let {
-                    it.resumeTimers()
-                    it.onResume()
-                }
                 controller?.resume()
                 ambient = false
             }
@@ -92,28 +79,25 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         val geometry = currentGeometry()
         lifecycle.addObserver(ambientObserver)
 
-        val view = when (val start = OrbitWebView.create(this)) {
-            is WebViewStart.Ready -> start.webView
-            is WebViewStart.Failed -> {
-                setContent {
-                    MaterialTheme {
-                        WebViewProblemScreen(
-                            start.problem,
-                            onOpenSettings = ::openAppSettings,
-                            onOpenStore = ::openInStore,
-                            onRetry = ::recreate,
-                        )
-                    }
+        val runtime = try {
+            OrbitRuntime.get(this)
+        } catch (e: Throwable) {
+            // Gecko's native libraries failed to load (wrong ABI, damaged install).
+            Log.e("OrbitGecko", "Engine failed to start", e)
+            setContent {
+                MaterialTheme {
+                    ErrorScreen(geometry, getString(R.string.error_engine), detail = e.javaClass.simpleName, onRetry = ::recreate)
                 }
-                return
             }
+            return
         }
-        webView = view
 
         val connection = ConnectionMonitor(this)
         val browser = BrowserController(
-            webView = view,
-            injector = Injector(this, geometry),
+            context = this,
+            runtime = runtime,
+            extension = OrbitRuntime.extension,
+            geometry = geometry,
             repo = app.repository,
             scope = lifecycleScope,
             memoryLog = MemoryLog(this, lifecycleScope),
@@ -123,7 +107,9 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         controller = browser
         val tabManager = TabManager(this, app.database.tabs(), lifecycleScope, browser)
         tabs = tabManager
-        val input = BezelInput(view, geometry).also { it.attach() }
+        val input = BezelInput(browser.view, geometry).also { it.attach() }
+        input.wasInteractiveTap = browser::recentInteractiveTap
+        input.hadContextMenu = browser::recentContextMenu
         bezel = input
 
         lifecycleScope.launch {
@@ -131,7 +117,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
                 browser.searchTemplate = s.searchTemplate
                 browser.readerStyle = s.reader
                 browser.setBlocking(s.blockTrackers)
-                view.settings.textZoom = s.textZoom
+                runtime.settings.fontSizeFactor = s.textZoom / 100f
                 keepScreenOn = s.keepScreenOn
                 if (!keepScreenOn) releaseScreen.run()
             }
@@ -168,30 +154,17 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
 
     override fun onStart() {
         super.onStart()
-        webView?.let {
-            it.onResume()
-            it.resumeTimers()
-        }
         controller?.resume()
     }
 
     override fun onStop() {
-        // Nothing on a hidden watch screen should run: pause the page and all JS timers.
+        // Nothing on a hidden watch screen should run: an inactive session stops painting and
+        // throttles the page's timers.
         controller?.pause()
-        webView?.let {
-            it.onPause()
-            it.pauseTimers()
-        }
         releaseScreen.run()
         // The tile shows the last page read and bookmarks: refresh it as we leave.
         OrbitTileService.requestUpdate(this)
         super.onStop()
-    }
-
-    override fun onTrimMemory(level: Int) {
-        super.onTrimMemory(level)
-        // Only UI_HIDDEN and BACKGROUND are still delivered on API 34+.
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) webView?.clearCache(false)
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -199,35 +172,13 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         controller?.saveState(outState)
     }
 
-    /** The system's app page for [pkg], where a disabled WebView can be turned back on. */
-    private fun openAppSettings(pkg: String) {
-        launch(Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$pkg".toUri()))
-    }
-
-    /** The watch's Play Store page for [pkg]; the web listing if the store isn't there. */
-    private fun openInStore(pkg: String) {
-        if (!launch(Intent(Intent.ACTION_VIEW, "market://details?id=$pkg".toUri()), quiet = true)) {
-            launch(Intent(Intent.ACTION_VIEW, "https://play.google.com/store/apps/details?id=$pkg".toUri()))
-        }
-    }
-
-    private fun launch(intent: Intent, quiet: Boolean = false): Boolean =
-        try {
-            startActivity(intent)
-            true
-        } catch (_: ActivityNotFoundException) {
-            if (!quiet) Toast.makeText(this, R.string.error_no_handler, Toast.LENGTH_SHORT).show()
-            false
-        }
-
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        webView?.let {
-            it.stopLoading()
-            (it.parent as? ViewGroup)?.removeView(it)
+        bezel?.detach()
+        controller?.let {
+            (it.view.parent as? ViewGroup)?.removeView(it.view)
             it.destroy()
         }
-        webView = null
         controller = null
         super.onDestroy()
     }
@@ -235,9 +186,9 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
     // ------------------------------------------------------------ BrowserHost
 
     /**
-     * The renderer was killed (usually to free memory). A WebView can't outlive its renderer,
-     * so rebuild the Activity with a fresh one and reopen the page, once. If the same page
-     * takes the renderer down again, land on the home screen instead of looping.
+     * The content process was killed (usually to free memory) or crashed. Rebuild the Activity
+     * with a fresh session and reopen the page, once. If the same page takes it down again,
+     * land on the home screen instead of looping.
      */
     override fun onRendererGone(url: String?) {
         handler.post {
@@ -247,13 +198,12 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
             recoveries.removeAll { now - it > RECOVERY_WINDOW_MS }
             recoveries.add(now)
             val repeat = recoveries.size > MAX_RECOVERIES
-            controller?.pause() // drop its timers before the WebView goes
-            controller = null // keeps onSaveInstanceState away from the dead WebView
-            webView?.let {
-                (it.parent as? ViewGroup)?.removeView(it)
+            controller?.let {
+                it.pause() // drop its timers before the session goes
+                (it.view.parent as? ViewGroup)?.removeView(it.view)
                 it.destroy()
             }
-            webView = null
+            controller = null // keeps onSaveInstanceState away from the dead session
             intent = if (url != null && !repeat) {
                 Intent(Intent.ACTION_VIEW, url.toUri(), this, MainActivity::class.java)
             } else {
@@ -277,6 +227,10 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         val app = application as OrbitApp
         lifecycleScope.launch { app.settings.setLastUrl(url) }
         tabs?.onPageCommitted(url, controller?.title)
+    }
+
+    override fun onLinkLongPress(url: String, title: String?) {
+        bezel?.onLinkLongPress?.invoke(url, title)
     }
 
     override fun onReaderStyleChanged(style: ReaderStyle) {

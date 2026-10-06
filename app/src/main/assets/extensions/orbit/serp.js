@@ -1,5 +1,5 @@
 /*
- * Orbit — search-results extractor. Evaluated by Injector.kt on Google, DuckDuckGo (HTML/Lite)
+ * Orbit — search-results extractor. Injected by background.js on Google, DuckDuckGo (HTML/Lite)
  * and Bing result pages; Orbit then draws the results as native cards and never shows the page.
  *
  * Google's class names are obfuscated and change often, so it is read through anchors that
@@ -21,7 +21,6 @@
     msg.url = location.href;
     var s = JSON.stringify(msg);
     if (window.orbitBridge) window.orbitBridge.postMessage(s);
-    else if (window.OrbitNative) window.OrbitNative.post(s);
   }
 
   function clean(s) {

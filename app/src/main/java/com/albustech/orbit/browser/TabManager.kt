@@ -2,22 +2,23 @@ package com.albustech.orbit.browser
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import com.albustech.orbit.data.db.TabDao
 import com.albustech.orbit.data.db.TabRecord
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import org.mozilla.geckoview.GeckoResult
 import java.io.File
 
 /**
- * Up to [MAX_TABS] tabs on one WebView. A background tab is not a live WebView: it's its URL,
+ * Up to [MAX_TABS] tabs on one GeckoSession. A background tab is not a live session: it's its URL,
  * title and a small snapshot on disk. Its reading position is in the positions table like any
  * page's, so switching back reopens the page where it was left.
  */
@@ -113,8 +114,10 @@ class TabManager(
         val id = currentId
         val url = controller.readerUrl ?: controller.url
         val title = controller.title
-        val bitmap = if (controller.hasPage) capture() else null
+        val shot = if (controller.hasPage) controller.capture() else null
         scope.launch {
+            // Gecko renders off the main thread: the snapshot arrives a frame or two later.
+            val bitmap = shot?.let { scaled(it) }
             val file = bitmap?.let { bmp ->
                 withContext(Dispatchers.IO) {
                     File(dir, "$id.jpg").also { f -> f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 70, it) } }
@@ -127,21 +130,19 @@ class TabManager(
         then()
     }
 
-    /** A third-size snapshot of the page, drawn on the main thread. */
-    private fun capture(): Bitmap? {
-        val view = controller.webView
-        if (view.width == 0 || view.height == 0) return null
-        val scale = SNAPSHOT_SCALE
-        val bmp = createBitmap((view.width * scale).toInt(), (view.height * scale).toInt(), Bitmap.Config.RGB_565)
-        val canvas = Canvas(bmp)
-        canvas.scale(scale, scale)
-        canvas.translate(-view.scrollX.toFloat(), -view.scrollY.toFloat())
-        view.draw(canvas)
-        return bmp
+    /** A third-size copy of [shot], waited for briefly; null if Gecko can't draw one now. */
+    private suspend fun scaled(shot: GeckoResult<Bitmap>): Bitmap? {
+        val full = withTimeoutOrNull(SNAPSHOT_TIMEOUT_MS) { shot.await() } ?: return null
+        return withContext(Dispatchers.Default) {
+            val w = (full.width * SNAPSHOT_SCALE).toInt().coerceAtLeast(1)
+            val h = (full.height * SNAPSHOT_SCALE).toInt().coerceAtLeast(1)
+            full.scale(w, h).also { if (it !== full) full.recycle() }
+        }
     }
 
     companion object {
         const val MAX_TABS = 3
         private const val SNAPSHOT_SCALE = 0.35f
+        private const val SNAPSHOT_TIMEOUT_MS = 1500L
     }
 }

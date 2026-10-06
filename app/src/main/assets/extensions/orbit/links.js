@@ -1,5 +1,5 @@
 /*
- * Orbit — link focus mode. Evaluated on demand by Injector.kt; installs window.orbitLinks.
+ * Orbit — link focus mode. Injected on demand by background.js; installs window.orbitLinks.
  *
  * The bezel steps through the visible links and controls in reading order (top to bottom,
  * then start to end), the focused one gets a ring, and a tap anywhere activates it. When
@@ -24,7 +24,6 @@
     msg.type = 'links';
     var s = JSON.stringify(msg);
     if (window.orbitBridge) window.orbitBridge.postMessage(s);
-    else if (window.OrbitNative) window.OrbitNative.post(s);
   }
 
   function geometry() {

@@ -1,10 +1,10 @@
 /*
- * Orbit — article extraction. Evaluated by Injector.kt after a page loads, inside a closure
- * that also contains Readability-readerable.js and Readability.js, so nothing leaks into the
- * page's globals.
+ * Orbit — article extraction. Injected by background.js after a page loads, as content scripts
+ * (Readability-readerable.js, Readability.js, then this): they run in the extension's sandbox,
+ * so nothing touches the page's own globals.
  *
- * Expects `orbitForce` (boolean) in scope: true when the user picked Reader for this site,
- * which skips the "is this an article?" heuristic.
+ * Expects `orbitForce` (boolean), set by a code snippet injected just before: true when the user
+ * picked Reader for this site, which skips the "is this an article?" heuristic.
  *
  * Posts one message: { type: 'article', ok, ...article } to the Kotlin bridge.
  */
@@ -15,7 +15,6 @@
   function post(msg) {
     var s = JSON.stringify(msg);
     if (window.orbitBridge) window.orbitBridge.postMessage(s);
-    else if (window.OrbitNative) window.OrbitNative.post(s);
   }
 
   // Elements that never belong in the reader: active content, forms, media players.

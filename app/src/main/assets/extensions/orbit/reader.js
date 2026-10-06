@@ -43,7 +43,6 @@
     msg.type = 'reader';
     var s = JSON.stringify(msg);
     if (window.orbitBridge) window.orbitBridge.postMessage(s);
-    else if (window.OrbitNative) window.OrbitNative.post(s);
   }
 
   function applyStyle() {

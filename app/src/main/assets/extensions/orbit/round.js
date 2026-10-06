@@ -1,15 +1,15 @@
 /*
  * Orbit — Round Scroll mode bootstrap. Runs at document start in the main frame.
  *
- * Expects (prepended by Injector.kt):
+ * Registered by background.js as a content script, with this prefix:
  *   window.__orbit    = { d, sq, inset }   screen geometry in CSS px
  *   window.__orbitCss = "...round.css..."
  * Falls back to the viewport size if __orbit is missing (e.g. in tools/round-check).
  */
 (function () {
   'use strict';
-  // Skip frames, repeats, and Orbit's own reader pages (loaded with this fragment).
-  if (window.top !== window || window.__orbitRound || location.hash === '#orbit-reader') return;
+  // Skip frames and repeats. (Orbit's reader is an extension page, where this never runs.)
+  if (window.top !== window || window.__orbitRound) return;
   window.__orbitRound = true;
 
   var VIEWPORT = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes';

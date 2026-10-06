@@ -1,6 +1,6 @@
 package com.albustech.orbit.browser
 
-import android.webkit.WebViewClient
+import org.mozilla.geckoview.WebRequestError
 
 /** A main-frame load failure, shown as Orbit's own error screen. */
 data class PageError(
@@ -32,13 +32,28 @@ data class PageError(
     }
 
     companion object {
-        /** Maps WebViewClient.ERROR_* codes. */
-        fun kindFor(code: Int): Kind = when (code) {
-            WebViewClient.ERROR_TIMEOUT -> Kind.TIMEOUT
-            WebViewClient.ERROR_HOST_LOOKUP -> Kind.HOST
-            WebViewClient.ERROR_CONNECT -> Kind.OFFLINE
-            WebViewClient.ERROR_FAILED_SSL_HANDSHAKE -> Kind.SECURITY
+        /** Maps GeckoView's WebRequestError category and code. */
+        fun kindFor(category: Int, code: Int): Kind = when {
+            code == WebRequestError.ERROR_OFFLINE -> Kind.OFFLINE
+            code == WebRequestError.ERROR_NET_TIMEOUT -> Kind.TIMEOUT
+            code == WebRequestError.ERROR_UNKNOWN_HOST || code == WebRequestError.ERROR_UNKNOWN_PROXY_HOST -> Kind.HOST
+            category == WebRequestError.ERROR_CATEGORY_SECURITY ||
+                code == WebRequestError.ERROR_BAD_HSTS_CERT -> Kind.SECURITY
             else -> Kind.OTHER
+        }
+
+        /** A plain description for the codes that end up as [Kind.OTHER]. */
+        fun detailFor(code: Int): String = when (code) {
+            WebRequestError.ERROR_CONNECTION_REFUSED -> "The site refused the connection."
+            WebRequestError.ERROR_NET_RESET, WebRequestError.ERROR_NET_INTERRUPT -> "The connection was interrupted."
+            WebRequestError.ERROR_REDIRECT_LOOP -> "The page keeps redirecting to itself."
+            WebRequestError.ERROR_UNSAFE_CONTENT_TYPE, WebRequestError.ERROR_CORRUPTED_CONTENT,
+            WebRequestError.ERROR_INVALID_CONTENT_ENCODING -> "The site sent something Orbit can't show."
+            WebRequestError.ERROR_CONTENT_CRASHED -> "The page crashed."
+            WebRequestError.ERROR_MALFORMED_URI, WebRequestError.ERROR_UNKNOWN_PROTOCOL -> "That address isn't valid."
+            WebRequestError.ERROR_PORT_BLOCKED -> "That port is blocked for safety."
+            WebRequestError.ERROR_HTTPS_ONLY -> "The site has no secure version."
+            else -> "Network error"
         }
     }
 }

@@ -1,44 +1,33 @@
 package com.albustech.orbit.browser
 
-import android.annotation.SuppressLint
+import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
-import android.net.http.SslError
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.SslErrorHandler
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
-import androidx.webkit.WebResourceErrorCompat
-import androidx.webkit.WebViewClientCompat
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
-import com.albustech.orbit.browser.filters.Cosmetics
-import com.albustech.orbit.browser.filters.FilterEngine
-import com.albustech.orbit.browser.filters.Types
+import com.albustech.orbit.BuildConfig
 import com.albustech.orbit.data.BrowserRepository
 import com.albustech.orbit.data.ReaderStyle
 import com.albustech.orbit.data.Suggestions
 import com.albustech.orbit.data.db.ReadingPosition
 import com.albustech.orbit.data.db.SiteMode
 import com.albustech.orbit.data.db.SiteSettings
-import com.albustech.orbit.input.WebViewScroller
+import com.albustech.orbit.input.GeckoScroller
 import com.albustech.orbit.reader.Anchor
 import com.albustech.orbit.reader.Article
 import com.albustech.orbit.reader.ArticleSanitizer
 import com.albustech.orbit.reader.ReaderTemplate
+import com.albustech.orbit.ui.RoundGeometry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -46,16 +35,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
-import java.util.concurrent.atomic.AtomicInteger
+import org.mozilla.geckoview.AllowOrDeny
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.ContentDelegate
+import org.mozilla.geckoview.GeckoSession.HistoryDelegate
+import org.mozilla.geckoview.GeckoSession.NavigationDelegate
+import org.mozilla.geckoview.GeckoSession.ProgressDelegate
+import org.mozilla.geckoview.GeckoSessionSettings
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebRequestError
+import org.mozilla.geckoview.WebResponse
+import java.security.SecureRandom
 import kotlin.math.abs
 import kotlin.math.pow
-import kotlin.math.roundToInt
 import kotlin.math.sign
 
 /** What the controller needs from the Activity. */
 interface BrowserHost {
-    /** The renderer died; this WebView is unusable and must be replaced. */
+    /** The content process died; this session is unusable and must be replaced. */
     fun onRendererGone(url: String?)
 
     /** Hands a URL the watch can't handle (mailto:, tel:, downloads) to the phone. */
@@ -71,28 +71,35 @@ interface BrowserHost {
 
     /** Reader typography changed from the bezel (zoom mode); persist it. */
     fun onReaderStyleChanged(style: ReaderStyle)
+
+    /** A long press on a link (Gecko's context menu): open the link wedges. */
+    fun onLinkLongPress(url: String, title: String?)
 }
 
 /**
- * Owns the single WebView and everything that happens in it, and exposes state to Compose.
- * Runs on the main thread, apart from shouldInterceptRequest, which only reads thread-safe state.
+ * Owns the one GeckoSession (shown in [view]) and everything that happens in it, and exposes
+ * state to Compose. Runs on the main thread.
+ *
+ * Pages are reached through the Orbit extension ([OrbitExtension], assets/extensions/orbit): it
+ * runs the round layout at document start, injects Readability / serp.js / links.js on request
+ * and relays their messages.
  *
  * Reader flow: a page loads in Round Scroll; if its site is AUTO or READER, extract.js runs
- * Readability and posts the article back; the reader page is then loaded with
- * loadDataWithBaseURL(articleUrl#orbit-reader). History becomes [… A, A-reader]; Back from
- * the reader skips A (which would only re-open the reader).
+ * Readability and posts the article back; the app sanitises it again and hands it to the
+ * extension, then loads the extension's reader page (moz-extension://…/reader.html#u=article).
+ * History becomes [… A, A-reader]; Back from the reader skips A (which would only re-open it).
  */
-// A browser runs page JavaScript by design; reader pages are additionally locked down by CSP.
-@SuppressLint("SetJavaScriptEnabled")
 class BrowserController(
-    val webView: WebView,
-    private val injector: Injector,
+    context: Context,
+    runtime: GeckoRuntime,
+    private val extension: OrbitExtension,
+    private val geometry: RoundGeometry,
     private val repo: BrowserRepository,
     private val scope: CoroutineScope,
     private val memoryLog: MemoryLog,
     private val connection: ConnectionMonitor,
     private val host: BrowserHost,
-) {
+) : PageListener {
     // ------------------------------------------------------------ observable state
 
     var url by mutableStateOf<String?>(null)
@@ -138,6 +145,8 @@ class BrowserController(
     /** 0..1 position in a scrolling page, for the edge arc. */
     var scrollFraction by mutableFloatStateOf(0f)
         private set
+
+    /** Requests uBlock Origin blocked on this page (its badge count). */
     var blockedCount by mutableIntStateOf(0)
         private set
 
@@ -152,35 +161,40 @@ class BrowserController(
         set(value) {
             if (value == field) return
             field = value
-            if (readerUrl != null) webView.evaluateJavascript(ReaderTemplate.setStyleJs(value), null)
+            if (readerUrl != null) extension.reader("setStyle", JSONObject(ReaderTemplate.styleJson(value)))
         }
+
+    // ------------------------------------------------------------------- engine
+
+    private val session = GeckoSession(
+        GeckoSessionSettings.Builder()
+            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
+            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+            .useTrackingProtection(true)
+            .suspendMediaWhenInactive(true)
+            .build(),
+    )
+
+    /** The page on screen. Compose shows it in an AndroidView. */
+    val view: GeckoView = GeckoView(context).apply {
+        coverUntilFirstPaint(Color.BLACK)
+        setBackgroundColor(Color.BLACK)
+    }
+
+    private val runtimeRef = runtime
+    private val scroller = GeckoScroller { session.panZoomController }
 
     // ------------------------------------------------------------------- internals
 
     private val main = Handler(Looper.getMainLooper())
-    private val scroller = WebViewScroller(webView)
-    private val mobileUa = UserAgents.mobile(WebSettings.getDefaultUserAgent(webView.context))
+    private val random = SecureRandom()
     private val siteCache = HashMap<String, SiteSettings>()
-    private val blockedCounter = AtomicInteger()
-    @Volatile private var filters: FilterEngine? = null
-    private var cosmetics: Cosmetics? = null
-    @Volatile private var blockingOn = true
-
-    /** The page on screen, for third-party and $domain= checks on the network threads. */
-    @Volatile private var topUrl: String? = null
-    @Volatile private var topHost: String? = null
-
-    /** Page-level filter exceptions ($document, $elemhide, $generichide) for [topUrl]. */
-    @Volatile private var pageFlags = 0
-
     private var appliedSiteKey: String? = null
     private var pendingExtract: String? = null
     private var expectingReader: String? = null
     private var readerTitle: String? = null
     /** False until this reader page says 'ready': earlier 'page' events are its initial layout. */
     private var readerReady = false
-    /** Bumped per navigation; late blocked-count posts from the previous page are dropped. */
-    @Volatile private var navGeneration = 0
 
     /** Results pages are loaded without images or round layout; restore the site's settings after. */
     private var serpOverride = false
@@ -196,36 +210,43 @@ class BrowserController(
     private var pendingFontSize: Int? = null
     private val readerAnchors = HashMap<String, Anchor>()
 
+    /** Gecko's history list, from HistoryDelegate. */
+    private var history: List<String?> = emptyList()
+    private var historyIndex = -1
+    private var geckoCanGoBack = false
+    private var geckoCanGoForward = false
+    private var lastState: GeckoSession.SessionState? = null
+
+    /** When the page last reported a tap on a link or control, and when Gecko last opened a context menu. */
+    private var interactiveTapAt = 0L
+    private var contextMenuAt = 0L
+    private var gestureLoadAt = 0L
+
     private val watchdog = Runnable {
         if (isLoading) {
             Log.w(TAG, "Load stalled at $progress% on ${connection.current()}")
-            webView.stopLoading()
+            session.stop()
             error = PageError(url.orEmpty(), PageError.Kind.TIMEOUT, "", connection.current())
         }
     }
 
     init {
-        webView.webViewClient = Client()
-        webView.webChromeClient = ChromeClient()
-        webView.setDownloadListener { downloadUrl, _, _, _, _ -> host.openOnPhone(downloadUrl) }
-        webView.setOnScrollChangeListener { _, _, y, _, _ -> onScrolled(y) }
-        Bridge(::onMessage, ::onFrameRequest).attach(webView)
-        injector.installCosmetics(webView)
+        session.navigationDelegate = Navigation()
+        session.progressDelegate = Progress()
+        session.contentDelegate = Content()
+        session.historyDelegate = History()
+        session.promptDelegate = Prompts(context)
+        session.open(runtime)
+        view.setSession(session)
+        runtime.webExtensionController.setTabActive(session, true)
+        extension.listener = this
+        OrbitRuntime.onUblock { ublock -> session.webExtensionController.setActionDelegate(ublock, BlockedBadge()) }
         applySite(SiteSettings(host = ""))
-        injector.setWebGlAllowed(webView, emptySet())
+        extension.setWebGlAllowed(emptySet())
         scope.launch {
             repo.allSiteSettings().forEach { siteCache[it.host] = it }
-            injector.setWebGlAllowed(webView, richGraphicsSites())
+            extension.setWebGlAllowed(richGraphicsSites())
             reapplyCachedSite()
-            val assets = webView.context.assets
-            // ~100k rules: index them off the main thread. Pages load unfiltered for that moment.
-            filters = withContext(Dispatchers.Default) {
-                assets.open("filters/network.txt").bufferedReader().use { FilterEngine.parse(it.readText()) }
-            }
-            pageFlags = filters?.pageFlags(topUrl) ?: 0
-            cosmetics = withContext(Dispatchers.Default) {
-                assets.open("filters/cosmetic.txt").bufferedReader().use { Cosmetics.parse(it.readText()) }
-            }
         }
     }
 
@@ -248,7 +269,7 @@ class BrowserController(
         hasPage = true
         url = target
         prepareFor(target)
-        webView.loadUrl(target)
+        session.loadUri(target)
     }
 
     /** Opens [target] as the start of a fresh history (a tab switch or a new tab). */
@@ -257,7 +278,7 @@ class BrowserController(
             // A blank tab: unload the old page (stops its scripts) and start a fresh history
             // with the next real page. about:blank itself is never treated as a page.
             showHome()
-            webView.loadUrl(BLANK)
+            session.loadUri(GeckoHistory.BLANK)
             clearHistoryOnNextLoad = true
             url = null
             title = null
@@ -276,31 +297,24 @@ class BrowserController(
             return true
         }
         val steps = backSteps() ?: return false
-        webView.goBackOrForward(steps)
+        session.gotoHistoryIndex(historyIndex + steps)
         return true
     }
 
-    /**
-     * How far Back goes, or null at the start. From a reader page every entry of the same
-     * article right behind it is skipped (its source page, an earlier reader copy, a #fragment
-     * the page pushed): landing on one would only re-open the reader.
-     */
     private fun backSteps(): Int? {
-        val list = webView.copyBackForwardList()
-        val i = list.currentIndex
-        val reading = readerUrl ?: return if (webView.canGoBack()) -1 else null
-        var j = i - 1
-        while (j >= 0 && sameDoc(list.getItemAtIndex(j)?.url, reading)) j--
-        while (j >= 0 && list.getItemAtIndex(j)?.url == BLANK) j--
-        return if (j >= 0) j - i else null
+        if (history.isEmpty()) return if (geckoCanGoBack) -1 else null
+        return GeckoHistory.backSteps(history, historyIndex, readerUrl, ::docOf, ::sameDoc)
     }
 
+    /** The document a history entry shows: a reader page's article, or the entry itself. */
+    private fun docOf(entry: String?): String? = ReaderTemplate.articleOf(entry, extension.baseUrl) ?: entry
+
     fun forward() {
-        if (webView.canGoForward()) webView.goForward()
+        if (geckoCanGoForward) session.goForward()
     }
 
     fun reloadOrStop() {
-        if (isLoading) webView.stopLoading() else reload()
+        if (isLoading) session.stop() else reload()
     }
 
     fun reload() {
@@ -311,12 +325,12 @@ class BrowserController(
             failed != null && isWebUrl(failed.url) -> loadUrl(failed.url)
             // Fetch the article afresh; Back still skips every copy of it.
             readerUrl != null -> loadUrl(readerUrl!!)
-            else -> webView.reload()
+            else -> session.reload()
         }
     }
 
     fun showHome() {
-        webView.stopLoading()
+        session.stop()
         setBezel(BezelMode.SCROLL)
         error = null
         hasPage = false
@@ -341,24 +355,22 @@ class BrowserController(
         when {
             source != null && !wantsReader -> {
                 // Leave the reader for the original page, re-using its entry if it's right behind us.
-                val list = webView.copyBackForwardList()
-                val i = list.currentIndex
                 appliedSiteKey = null
                 applySiteFor(source)
-                if (i >= 1 && sameDoc(list.getItemAtIndex(i - 1)?.url, source)) webView.goBack() else webView.loadUrl(source)
+                val previous = history.getOrNull(historyIndex - 1)
+                if (historyIndex >= 1 && sameDoc(previous, source)) session.goBack() else session.loadUri(source)
             }
             source != null -> Unit // already reading
-            wantsReader && !injectorWasZoom() -> requestExtract(pageUrl, force = true)
+            wantsReader && lastAppliedRender != RenderMode.ZOOM -> requestExtract(pageUrl, force = true)
             else -> {
                 appliedSiteKey = null
                 applySiteFor(pageUrl)
-                webView.reload()
+                session.reload()
             }
         }
     }
 
     private var lastAppliedRender = RenderMode.SCROLL
-    private fun injectorWasZoom() = lastAppliedRender == RenderMode.ZOOM
 
     /** Changes a per-site toggle (images, JavaScript, lite UA, WebGL) and reloads to apply it. */
     fun updateSite(transform: (SiteSettings) -> SiteSettings) {
@@ -367,7 +379,7 @@ class BrowserController(
         val updated = transform(savedSite(key))
         saveSite(updated)
         applySite(updated)
-        if (readerUrl != null) webView.settings.javaScriptEnabled = true else if (hasPage) webView.reload()
+        if (readerUrl != null) session.settings.allowJavascript = true else if (hasPage) session.reload()
     }
 
     private fun savedSite(key: String) = siteCache[key] ?: SiteSettings(host = key)
@@ -380,10 +392,10 @@ class BrowserController(
         appliedSiteKey = null
         if (readerUrl != null) {
             applySiteFor(readerUrl)
-            webView.settings.javaScriptEnabled = true
+            session.settings.allowJavascript = true
         } else {
             applySiteFor(url)
-            if (hasPage) webView.reload()
+            if (hasPage) session.reload()
         }
     }
 
@@ -393,7 +405,7 @@ class BrowserController(
     private fun saveSite(s: SiteSettings) {
         siteCache[s.host] = s
         site = s
-        injector.setWebGlAllowed(webView, richGraphicsSites())
+        extension.setWebGlAllowed(richGraphicsSites())
         scope.launch { repo.saveSiteSettings(s) }
     }
 
@@ -419,8 +431,8 @@ class BrowserController(
         serpOverride = true
         if (serp?.let { key(it.url) } != key(target)) serp = SerpState.Loading(page, target)
         // Never shown as a page: skip its images and the round layout.
-        webView.settings.blockNetworkImage = true
-        injector.setRoundLayout(webView, false)
+        extension.setBlockImages(true)
+        setRoundLayout(false)
     }
 
     fun serpIndexFor(pageUrl: String): Int = serpIndex[key(pageUrl)] ?: 0
@@ -448,7 +460,7 @@ class BrowserController(
             if (isLoading) return // the finished page gets another try
             if (!serpRetried) {
                 serpRetried = true
-                main.postDelayed({ if (serp is SerpState.Loading) injector.extractSerp(webView) }, SERP_RETRY_MS)
+                main.postDelayed({ if (serp is SerpState.Loading) extension.inject("serp") }, SERP_RETRY_MS)
                 return
             }
             // CAPTCHA, consent screen or an unknown layout: show the real page instead.
@@ -458,7 +470,7 @@ class BrowserController(
             serpOverride = false
             appliedSiteKey = null
             applySiteFor(state.url)
-            webView.reload()
+            session.reload()
             return
         }
         val answer = msg.optString("answer").trim().ifEmpty { null }
@@ -469,15 +481,19 @@ class BrowserController(
 
     private fun applySite(s: SiteSettings) {
         site = s
-        val settings = webView.settings
-        settings.javaScriptEnabled = s.javaScript
-        settings.blockNetworkImage = s.blockImages
-        settings.userAgentString = if (s.liteUserAgent) UserAgents.LITE else mobileUa
+        val settings = session.settings
+        settings.allowJavascript = s.javaScript
+        settings.userAgentOverride = if (s.liteUserAgent) UserAgents.LITE else null
+        extension.setBlockImages(s.blockImages)
         val mode = if (s.mode == SiteMode.ZOOM) RenderMode.ZOOM else RenderMode.SCROLL
         lastAppliedRender = mode
-        injector.setRoundLayout(webView, mode == RenderMode.SCROLL)
-        OrbitWebView.applyMode(webView, mode)
+        // Zoom view: the page's own desktop-width layout, shown whole; pinch or bezel to zoom.
+        settings.viewportMode = if (mode == RenderMode.ZOOM) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+        setRoundLayout(mode == RenderMode.SCROLL)
     }
+
+    private fun setRoundLayout(on: Boolean) =
+        extension.setRoundLayout(on, geometry.diameterCss, geometry.squareCss, geometry.insetCss)
 
     // ----------------------------------------------------------------- bezel
 
@@ -485,13 +501,13 @@ class BrowserController(
     fun onBezel(detents: Int, stepPx: Int, eventTimeMs: Long) {
         when (bezelMode) {
             BezelMode.SCROLL -> if (readerUrl != null) {
-                webView.evaluateJavascript("window.orbitReader&&orbitReader.turn($detents)", null)
-            } else {
-                scroller.onDetents(detents, stepPx, eventTimeMs)
+                extension.reader("turn", detents)
+            } else if (scroller.onDetents(detents, stepPx, eventTimeMs)) {
+                host.onEdge()
             }
             BezelMode.LINKS -> {
                 val dir = sign(detents.toFloat()).toInt()
-                repeat(abs(detents)) { webView.evaluateJavascript("window.orbitLinks&&orbitLinks.step($dir)", null) }
+                repeat(abs(detents)) { links("linksStep", dir) }
             }
             BezelMode.ZOOM -> if (readerUrl != null) {
                 val size = (displayedFontSize + detents).coerceIn(ReaderStyle.MIN_FONT_SIZE, ReaderStyle.MAX_FONT_SIZE)
@@ -506,7 +522,7 @@ class BrowserController(
                     host.onReaderStyleChanged(style)
                 }
             } else {
-                webView.zoomBy(ZOOM_STEP.pow(detents).coerceIn(0.02f, 50f))
+                scroller.zoom(view, ZOOM_STEP.pow(detents).coerceIn(0.2f, 5f))
             }
         }
     }
@@ -523,7 +539,7 @@ class BrowserController(
 
     fun setBezel(mode: BezelMode) {
         if (linksActive && mode != BezelMode.LINKS) {
-            webView.evaluateJavascript("window.orbitLinks&&orbitLinks.stop()", null)
+            links("linksStop")
             linksActive = false
             focusedLink = null
         }
@@ -535,63 +551,56 @@ class BrowserController(
                 return
             }
             linksActive = true
-            injector.startLinks(webView)
-            webView.evaluateJavascript("window.orbitLinks&&orbitLinks.step(1)", null)
+            if (readerUrl == null) extension.inject("links") // the reader page loads links.js itself
+            links("linksStep", 1)
         }
     }
 
-    /**
-     * Zoom view: WebView's double-tap fits the tapped block to the full width, which on a round
-     * screen puts its line ends under the rim. Once that zoom has settled, scale it back so the
-     * block fits the inscribed square (the square is 1/√2 of the width).
-     */
-    fun onDoubleTap() {
-        if (renderMode != RenderMode.ZOOM) return
-        @Suppress("DEPRECATION")
-        val before = webView.scale
-        main.postDelayed({
-            @Suppress("DEPRECATION")
-            if (webView.scale > before * 1.05f) webView.zoomBy(SQUARE_FIT)
-        }, DOUBLE_TAP_SETTLE_MS)
-    }
+    fun activateFocusedLink() = links("linksActivate")
 
-    fun activateFocusedLink() {
-        webView.evaluateJavascript("window.orbitLinks&&orbitLinks.activate()", null)
+    /** Link focus commands go to bridge.js on web pages and to the reader page in Reader. */
+    private fun links(name: String, arg: Any? = null) {
+        if (readerUrl != null) extension.reader(name, arg) else extension.page(name, arg)
     }
 
     // ------------------------------------------------------------------- reader
 
     private fun requestExtract(pageUrl: String, force: Boolean) {
-        if (!site.javaScript) {
-            if (force) host.toast("Reader needs JavaScript on this site")
-            return
-        }
+        if (extension.baseUrl == null) return // the extension isn't up yet: no reader page to show
         pendingExtract = pageUrl
-        injector.extract(webView, force)
+        extension.inject("extract", force)
     }
 
     private fun showReader(article: Article) {
+        val base = extension.baseUrl ?: return
         scope.launch {
             val saved = repo.position(article.url)
             val anchor = readerAnchors[key(article.url)]
                 ?: saved?.takeIf { it.reader }?.let { Anchor(it.anchorBlock, it.anchorWord) }
-            val html = withContext(Dispatchers.Default) {
+            val payload = withContext(Dispatchers.Default) {
                 // extract.js sanitises in the page, but the page could tamper with that:
                 // clean again here, outside its reach.
-                injector.readerPage(article.copy(content = ArticleSanitizer.clean(article.content, article.url)), readerStyle, anchor)
+                val clean = article.copy(content = ArticleSanitizer.clean(article.content, article.url))
+                ReaderTemplate.payload(clean, geometry.diameterCss, geometry.squareCss, geometry.insetCss, readerStyle, anchor)
             }
             if (!sameDoc(url, article.url)) return@launch // the user moved on meanwhile
+            val token = newToken()
+            extension.readerPayload(token, payload)
             expectingReader = article.url
             readerTitle = article.title
-            // The history entry carries the marker too, so Back/Forward onto it is recognised
-            // whichever URL the WebView reports for a data page.
-            val base = ReaderTemplate.baseUrl(article.url)
-            webView.loadDataWithBaseURL(base, html, "text/html", "utf-8", base)
+            session.settings.allowJavascript = true // the reader's own script; the extension's CSP keeps page code out
+            session.loadUri(ReaderTemplate.pageUrl(base, article.url, token))
         }
     }
 
-    private fun onArticle(msg: JSONObject) {
+    private fun newToken(): String {
+        val bytes = ByteArray(9).also(random::nextBytes)
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun onArticle(msg: JSONObject, from: String) {
         val requested = pendingExtract ?: return
+        if (!sameDoc(from, requested)) return
         pendingExtract = null
         if (!sameDoc(requested, url) || readerUrl != null) return
         if (!msg.optBoolean("ok")) {
@@ -611,14 +620,16 @@ class BrowserController(
         if (article.content.isNotBlank()) showReader(article)
     }
 
-    private fun onReaderMessage(msg: JSONObject) {
-        val article = readerUrl ?: run {
-            // Arrived on a reader page through history: recognise it by its marker.
-            val current = webView.url ?: return
-            if (!current.endsWith(ReaderTemplate.MARKER)) return
-            current.removeSuffix(ReaderTemplate.MARKER).also { readerUrl = it }
-        }
+    private fun onReaderMessage(msg: JSONObject, from: String) {
+        // Only Orbit's own reader page speaks for the reader.
+        val article = ReaderTemplate.articleOf(from, extension.baseUrl) ?: return
+        if (readerUrl == null) readerUrl = article // arrived on a reader page through history
         val event = msg.optString("event")
+        if (event == "missing") {
+            // Reopened from history after a restart: its article is gone from memory. Fetch it again.
+            loadUrl(article)
+            return
+        }
         val page = msg.optInt("page")
         val total = msg.optInt("total")
         reader = ReaderProgress(page, total, msg.optBoolean("done"))
@@ -628,9 +639,9 @@ class BrowserController(
                 readerReady = true
                 val known = readerAnchors[key(article)]
                 if (known != null && known != anchor) {
-                    webView.evaluateJavascript("window.orbitReader&&orbitReader.goToAnchor({u:${known.unit},w:${known.word}})", null)
+                    extension.reader("goToAnchor", JSONObject().put("u", known.unit).put("w", known.word))
                 }
-                if (readerTitle == null) readerTitle = webView.title
+                if (readerTitle == null) readerTitle = title
                 title = readerTitle
                 scope.launch { repo.recordVisit(article, readerTitle) }
                 host.onPageCommitted(article)
@@ -657,6 +668,7 @@ class BrowserController(
     }
 
     private fun onLinksMessage(msg: JSONObject) {
+        if (!linksActive) return
         when (msg.optString("event")) {
             "focus" -> focusedLink = LinkFocus(
                 msg.optString("href"),
@@ -665,28 +677,32 @@ class BrowserController(
                 msg.optInt("index"),
                 msg.optInt("count"),
             )
-            "activate" -> if (msg.optString("kind") == "input") webView.requestFocus() // keyboard needs focus
+            "activate" -> if (msg.optString("kind") == "input") {
+                view.requestFocus() // the keyboard needs the view focused
+                session.setFocused(true)
+            }
             "none" -> focusedLink = null
             "edge" -> host.onEdge()
         }
     }
 
-    private fun onMessage(type: String, msg: JSONObject) {
-        logBridge(type, msg)
+    // ---------------------------------------------------------------- PageListener
+
+    override fun onPageMessage(type: String, msg: JSONObject, frameId: Int, url: String) {
+        if (frameId != 0) return
+        if (BuildConfig.DEBUG && type != "article") Log.v("OrbitBridge", "$type $msg")
         when (type) {
-            "article" -> onArticle(msg)
-            "reader" -> onReaderMessage(msg)
+            "article" -> onArticle(msg, url)
+            "reader" -> onReaderMessage(msg, url)
             "links" -> onLinksMessage(msg)
             "serp" -> onSerp(msg)
         }
     }
 
-    // ---------------------------------------------------------------- positions
-
-    private fun onScrolled(y: Int) {
+    override fun onPageMetrics(y: Int, max: Int) {
+        scroller.position = y
+        scroller.max = max
         if (readerUrl != null || !hasPage) return
-        @Suppress("DEPRECATION")
-        val max = (webView.contentHeight * webView.scale).roundToInt() - webView.height
         scrollFraction = if (max > 0) (y.toFloat() / max).coerceIn(0f, 1f) else 0f
         val pageUrl = url ?: return
         if (isLoading) return
@@ -700,6 +716,21 @@ class BrowserController(
             ),
         )
     }
+
+    override fun onPageTap(interactive: Boolean) {
+        if (interactive) interactiveTapAt = SystemClock.uptimeMillis()
+    }
+
+    /** The page just reported a tap on a link or control, or a tap started a navigation. */
+    fun recentInteractiveTap(): Boolean {
+        val now = SystemClock.uptimeMillis()
+        return now - interactiveTapAt < RECENT_MS || now - gestureLoadAt < RECENT_MS
+    }
+
+    /** Gecko just reported a long press on a link. */
+    fun recentContextMenu(): Boolean = SystemClock.uptimeMillis() - contextMenuAt < RECENT_MS
+
+    // ---------------------------------------------------------------- positions
 
     private fun savePositionSoon(position: ReadingPosition) {
         positionJob?.cancel()
@@ -715,18 +746,8 @@ class BrowserController(
             if (pos.reader || pos.scrollFraction < 0.01f) return@launch
             delay(250)
             // Back/forward restore their own scroll; only act on a fresh load at the top.
-            if (!sameDoc(url, pageUrl) || webView.scrollY > 0) return@launch
-            val f = JsStrings.number(pos.scrollFraction)
-            if (site.javaScript) {
-                webView.evaluateJavascript(
-                    "window.scrollTo(0,$f*Math.max(0,document.documentElement.scrollHeight-innerHeight))",
-                    null,
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                val max = (webView.contentHeight * webView.scale).roundToInt() - webView.height
-                webView.scrollTo(0, (pos.scrollFraction * max).roundToInt())
-            }
+            if (!sameDoc(url, pageUrl) || scroller.position > 0) return@launch
+            extension.page("scrollToFraction", pos.scrollFraction.toDouble())
         }
     }
 
@@ -734,7 +755,7 @@ class BrowserController(
 
     private fun refreshNav() {
         canGoBack = backSteps() != null
-        canGoForward = webView.canGoForward()
+        canGoForward = geckoCanGoForward
     }
 
     private fun armWatchdog() {
@@ -742,248 +763,268 @@ class BrowserController(
         if (isLoading) main.postDelayed(watchdog, connection.current().stallTimeoutMs)
     }
 
-    private fun key(u: String) = BrowserRepository.normalize(u.removeSuffix(ReaderTemplate.MARKER))
+    private fun key(u: String) = BrowserRepository.normalize(u)
 
     private fun sameDoc(a: String?, b: String?): Boolean = a != null && b != null && key(a) == key(b)
 
-    /**
-     * Reader history entries hold whole pages, so the WebView's own state can outgrow the
-     * Binder limit: cap it where supported, and always keep the URL as a fallback.
-     */
+    /** A snapshot of the page for the tab switcher; Gecko delivers it a frame or two later. */
+    fun capture(): GeckoResult<Bitmap>? = if (view.width > 0 && view.height > 0) view.capturePixels() else null
+
+    /** Gecko's session state (history and form data) if small enough, and always the URL. */
     fun saveState(out: Bundle) {
         (readerUrl ?: url)?.let { out.putString(STATE_URL, it) }
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAVE_STATE)) {
-            WebViewCompat.saveState(webView, out, MAX_STATE_BYTES, false)
-        }
+        val state = lastState?.toString() ?: return
+        if (state.length <= MAX_STATE_CHARS) out.putString(STATE_SESSION, state)
     }
 
     fun restoreState(saved: Bundle): Boolean {
-        val list = webView.restoreState(saved)
-        if (list == null || list.size == 0) {
+        val state = saved.getString(STATE_SESSION)?.let { runCatching { GeckoSession.SessionState.fromString(it) }.getOrNull() }
+        if (state == null || state.isEmpty()) {
             val fallback = saved.getString(STATE_URL) ?: return false
             loadUrl(fallback)
             return isWebUrl(fallback)
         }
+        session.restoreState(state)
         hasPage = true
-        url = list.currentItem?.url?.removeSuffix(ReaderTemplate.MARKER)
-        title = list.currentItem?.title
+        val current = state.getOrNull(state.currentIndex)
+        url = current?.uri?.let { ReaderTemplate.articleOf(it, extension.baseUrl) ?: it }
+        title = current?.title
         refreshNav()
         return true
     }
 
-    /** Stops timers and animations (Activity stopped or ambient). */
+    /** Stops timers, animations and the page itself (Activity stopped or ambient). */
     fun pause() {
         main.removeCallbacks(watchdog)
         scroller.stop()
+        session.setActive(false)
     }
 
     fun resume() {
+        session.setActive(true)
         armWatchdog()
     }
 
-    /**
-     * The main frame moved to [target]: what third-party and page exceptions are judged by.
-     * Called from the network thread too, hence the @Volatile fields.
-     */
-    private fun onFilterPage(target: String?) {
-        topUrl = target
-        topHost = target?.toUri()?.host
-        pageFlags = filters?.pageFlags(target) ?: 0
+    /** Releases the session; the controller is unusable afterwards. */
+    fun destroy() {
+        main.removeCallbacksAndMessages(null)
+        if (extension.listener === this) extension.listener = null
+        runtimeRef.webExtensionController.setTabActive(session, false)
+        view.releaseSession()
+        session.close()
     }
 
-    /**
-     * Element hiding for a frame (cosmetic.js): its site rules on the first ask, then the generic
-     * rules for the ids and classes it reports. Not for Orbit's own reader or results pages.
-     */
-    private fun onFrameRequest(type: String, msg: JSONObject, origin: Uri, reply: (String) -> Unit) {
-        if (type != "cosmetic" || !blockingOn || readerUrl != null || serp != null) return
-        val c = cosmetics ?: return
-        val host = origin.host ?: return
-        val css = buildString {
-            if (msg.optBoolean("first")) append(c.siteCss(host, pageFlags))
-            append(c.genericCss(host, pageFlags, msg.optJSONArray("ids").strings(), msg.optJSONArray("classes").strings()))
-        }
-        if (css.isNotEmpty()) reply(css)
-    }
-
-    private fun org.json.JSONArray?.strings(): List<String> {
-        if (this == null) return emptyList()
-        val n = minOf(length(), MAX_COSMETIC_NAMES)
-        return List(n) { optString(it) }.filter { it.isNotEmpty() && it.length <= MAX_COSMETIC_NAME }
-    }
-
-    /** Applies the blocking setting; read on the network thread in shouldInterceptRequest. */
+    /** The "Block ads and trackers" setting. */
     fun setBlocking(on: Boolean) {
-        blockingOn = on
+        OrbitRuntime.setBlocking(view.context, on)
+        if (!on) blockedCount = 0
     }
 
-    // ----------------------------------------------------------------- clients
+    // ----------------------------------------------------------------- page start/stop
 
-    // Lint misses the onRenderProcessGone override below when the base is WebViewClientCompat.
-    @SuppressLint("MissingOnRenderProcessGone")
-    private inner class Client : WebViewClientCompat() {
-
-        override fun onPageStarted(view: WebView, pageUrl: String?, favicon: Bitmap?) {
-            val expected = expectingReader
-            expectingReader = null
-            if (pageUrl == BLANK && expected == null) return // a blank tab, not a page
-            // Reader pages are recognised by the marker on their URL (base and history URL);
-            // a data: URL only counts while we're waiting for our own reader load.
-            val reading = when {
-                pageUrl?.endsWith(ReaderTemplate.MARKER) == true -> pageUrl.removeSuffix(ReaderTemplate.MARKER)
-                expected != null && (pageUrl == null || pageUrl.startsWith("data:")) -> expected
-                else -> null
-            }
-            readerUrl = reading
-            readerReady = false
-            navGeneration++
-            serpRetried = false
-            if (reading == null) {
-                reader = null
-                readerTitle = null
-                prepareFor(pageUrl)
-            } else {
-                serp = null
-                // The article's own site settings, but the reader always needs its script
-                // (page scripts are blocked by its CSP either way).
-                applySiteFor(reading)
-                view.settings.javaScriptEnabled = true
-            }
-            isLoading = true
-            progress = 0
-            error = null
-            url = reading ?: pageUrl
-            onFilterPage(reading ?: pageUrl)
-            scrollFraction = 0f
-            blockedCounter.set(0)
-            blockedCount = 0
-            focusedLink = null
-            linksActive = false
-            bezelMode = if (reading == null && site.mode == SiteMode.ZOOM) BezelMode.ZOOM else BezelMode.SCROLL
-            pendingExtract = null
-            scroller.stop()
-            refreshNav()
-            armWatchdog()
+    private fun onStarted(pageUrl: String?) {
+        val expected = expectingReader
+        expectingReader = null
+        if (pageUrl == GeckoHistory.BLANK) return // a blank tab, not a page
+        val reading = ReaderTemplate.articleOf(pageUrl, extension.baseUrl)
+            ?: expected?.takeIf { pageUrl?.startsWith("moz-extension:") == true }
+        readerUrl = reading
+        readerReady = false
+        serpRetried = false
+        if (reading == null) {
+            reader = null
+            readerTitle = null
+            prepareFor(pageUrl)
+        } else {
+            serp = null
+            // The article's own site settings, but the reader always needs its script.
+            applySiteFor(reading)
+            session.settings.allowJavascript = true
         }
+        isLoading = true
+        progress = 0
+        error = null
+        url = reading ?: pageUrl
+        scrollFraction = 0f
+        scroller.position = 0
+        scroller.max = -1
+        blockedCount = 0
+        focusedLink = null
+        linksActive = false
+        bezelMode = if (reading == null && site.mode == SiteMode.ZOOM) BezelMode.ZOOM else BezelMode.SCROLL
+        pendingExtract = null
+        scroller.stop()
+        refreshNav()
+        armWatchdog()
+    }
 
-        override fun onPageCommitVisible(view: WebView, pageUrl: String) {
-            if (serp != null) injector.extractSerp(view) else injector.injectLate(view)
+    private fun onStopped(success: Boolean) {
+        isLoading = false
+        progress = 100
+        main.removeCallbacks(watchdog)
+        val pageUrl = url
+        if (pageUrl == null || !success) return
+        if (clearHistoryOnNextLoad && (readerUrl != null || isWebUrl(pageUrl))) {
+            clearHistoryOnNextLoad = false
+            session.purgeHistory()
         }
-
-        override fun onPageFinished(view: WebView, pageUrl: String?) {
-            isLoading = false
-            progress = 100
-            main.removeCallbacks(watchdog)
-            if (pageUrl == BLANK) return
-            if (clearHistoryOnNextLoad && (readerUrl != null || isWebUrl(pageUrl))) {
-                clearHistoryOnNextLoad = false
-                view.clearHistory()
-            }
-            refreshNav()
-            memoryLog.onPageLoaded(pageUrl)
-            if (readerUrl != null || pageUrl == null || error != null || !pageUrl.startsWith("http")) return
-            if (serp != null) {
-                injector.extractSerp(view)
-                scope.launch { repo.recordVisit(pageUrl, view.title) }
-                return
-            }
-            injector.injectLate(view)
-            host.onPageCommitted(pageUrl)
-            scope.launch { repo.recordVisit(pageUrl, view.title) }
-            if (site.mode == SiteMode.AUTO || site.mode == SiteMode.READER) {
-                requestExtract(pageUrl, force = site.mode == SiteMode.READER)
-            }
-            restoreScroll(pageUrl)
+        refreshNav()
+        memoryLog.onPageLoaded(pageUrl)
+        if (readerUrl != null || error != null || !isWebUrl(pageUrl)) return
+        if (serp != null) {
+            extension.inject("serp")
+            scope.launch { repo.recordVisit(pageUrl, title) }
+            return
         }
-
-        override fun doUpdateVisitedHistory(view: WebView, pageUrl: String?, isReload: Boolean) {
-            if (readerUrl == null && pageUrl?.startsWith("http") == true) url = pageUrl
-            refreshNav()
+        host.onPageCommitted(pageUrl)
+        scope.launch { repo.recordVisit(pageUrl, title) }
+        if (site.javaScript && (site.mode == SiteMode.AUTO || site.mode == SiteMode.READER)) {
+            requestExtract(pageUrl, force = site.mode == SiteMode.READER)
         }
+        restoreScroll(pageUrl)
+    }
 
-        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-            val uri = request.url
-            when (uri.scheme?.lowercase()) {
+    // ----------------------------------------------------------------- delegates
+
+    private inner class Navigation : NavigationDelegate {
+
+        override fun onLoadRequest(session: GeckoSession, request: NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            val uri = request.uri
+            if (request.hasUserGesture) gestureLoadAt = SystemClock.uptimeMillis()
+            return when (uri.toUri().scheme?.lowercase()) {
                 "http", "https" -> {
-                    if (request.isForMainFrame) prepareFor(uri.toString())
-                    return false
+                    if (request.target == NavigationDelegate.TARGET_WINDOW_NEW) {
+                        // One window on a watch: open target=_blank links in place.
+                        main.post { loadUrl(uri) }
+                        GeckoResult.deny()
+                    } else {
+                        prepareFor(uri)
+                        GeckoResult.allow()
+                    }
                 }
-                "about", "data", "blob" -> return false
+                "about", "data", "blob", "moz-extension", "resource" -> GeckoResult.allow()
                 "intent" -> {
                     // intent://…#Intent;…;S.browser_fallback_url=…;end: follow the web fallback.
-                    val fallback = FALLBACK.find(uri.toString())?.groupValues?.get(1)?.let(Uri::decode)
-                    if (fallback != null && fallback.startsWith("http")) view.loadUrl(fallback)
-                    return true
+                    val fallback = FALLBACK.find(uri)?.groupValues?.get(1)?.let(Uri::decode)
+                    if (fallback != null && fallback.startsWith("http")) main.post { loadUrl(fallback) }
+                    GeckoResult.deny()
                 }
                 "mailto", "tel", "sms", "geo", "market" -> {
-                    host.openOnPhone(uri.toString())
-                    return true
+                    host.openOnPhone(uri)
+                    GeckoResult.deny()
+                }
+                else -> {
+                    Log.i(TAG, "Blocked navigation to $uri")
+                    GeckoResult.deny()
                 }
             }
-            Log.i(TAG, "Blocked navigation to $uri")
-            return true
         }
 
-        override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-            if (request.isForMainFrame) {
-                // The earliest sign of the new page (redirects included): judge its subresources
-                // against it, not the page before, even if they arrive before onPageStarted.
-                onFilterPage(request.url.toString())
-                return null
-            }
-            if (!blockingOn) return null
-            val engine = filters ?: return null
-            if (pageFlags and Types.DOCUMENT != 0) return null
-            val target = request.url.toString()
-            val type = Types.guess(target, request.requestHeaders["Accept"] ?: request.requestHeaders["accept"])
-            if (!engine.shouldBlock(target, topHost, type)) return null
-            val n = blockedCounter.incrementAndGet()
-            val gen = navGeneration
-            main.post { if (gen == navGeneration) blockedCount = n }
-            return WebResourceResponse("text/plain", "utf-8", 204, "No Content", emptyMap(), ByteArrayInputStream(ByteArray(0)))
+        override fun onSubframeLoadRequest(session: GeckoSession, request: NavigationDelegate.LoadRequest): GeckoResult<AllowOrDeny> {
+            val scheme = request.uri.toUri().scheme?.lowercase()
+            return if (scheme in SUBFRAME_SCHEMES) GeckoResult.allow() else GeckoResult.deny()
         }
 
-        override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceErrorCompat) {
-            if (!request.isForMainFrame) return
-            val code = if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_RESOURCE_ERROR_GET_CODE)) err.errorCode else 0
-            val detail = if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_RESOURCE_ERROR_GET_DESCRIPTION)) {
-                err.description.toString()
-            } else {
-                "Network error"
-            }
+        override fun onNewSession(session: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
+            if (isWebUrl(uri)) main.post { loadUrl(uri) }
+            return null
+        }
+
+        override fun onLocationChange(
+            session: GeckoSession,
+            location: String?,
+            perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
+            hasUserGesture: Boolean,
+        ) {
+            // pushState and fragment changes on the same page (WebView's doUpdateVisitedHistory).
+            if (readerUrl == null && location != null && isWebUrl(location)) url = location
+            refreshNav()
+        }
+
+        override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+            geckoCanGoBack = canGoBack
+            refreshNav()
+        }
+
+        override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+            geckoCanGoForward = canGoForward
+            refreshNav()
+        }
+
+        override fun onLoadError(session: GeckoSession, uri: String?, err: WebRequestError): GeckoResult<String>? {
             val conn = connection.current()
-            val kind = if (conn == ConnectionType.NONE) PageError.Kind.OFFLINE else PageError.kindFor(code)
-            error = PageError(request.url.toString(), kind, detail, conn)
+            val kind = if (conn == ConnectionType.NONE) PageError.Kind.OFFLINE else PageError.kindFor(err.category, err.code)
+            error = PageError(uri ?: url.orEmpty(), kind, PageError.detailFor(err.code), conn)
             serp = null
-        }
-
-        @SuppressLint("WebViewClientOnReceivedSslError") // Always cancels: never proceeds past a bad certificate.
-        override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, sslError: SslError) {
-            handler.cancel()
-            if (sameDoc(sslError.url, url)) {
-                error = PageError(sslError.url, PageError.Kind.SECURITY, "", connection.current())
-            }
-        }
-
-        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-            // On a 2 GB watch the system may kill the renderer to reclaim memory. Returning
-            // true keeps the app alive; the WebView itself can't be reused.
-            Log.w(TAG, "Renderer gone (crash=${detail.didCrash()}) at $url")
-            host.onRendererGone(readerUrl ?: url)
-            return true
+            isLoading = false
+            main.removeCallbacks(watchdog)
+            return null // Orbit draws its own error screen over Gecko's page
         }
     }
 
-    private inner class ChromeClient : WebChromeClient() {
-        override fun onProgressChanged(view: WebView, newProgress: Int) {
-            if (newProgress != progress) {
-                progress = newProgress
+    private inner class Progress : ProgressDelegate {
+        override fun onPageStart(session: GeckoSession, url: String) = onStarted(url)
+
+        override fun onPageStop(session: GeckoSession, success: Boolean) = onStopped(success)
+
+        override fun onProgressChange(session: GeckoSession, progress: Int) {
+            if (progress != this@BrowserController.progress) {
+                this@BrowserController.progress = progress
                 armWatchdog()
             }
         }
 
-        override fun onReceivedTitle(view: WebView, newTitle: String?) {
+        override fun onSessionStateChange(session: GeckoSession, sessionState: GeckoSession.SessionState) {
+            lastState = sessionState
+        }
+    }
+
+    private inner class Content : ContentDelegate {
+        override fun onTitleChange(session: GeckoSession, newTitle: String?) {
             title = if (readerUrl != null) readerTitle ?: newTitle else newTitle
+        }
+
+        override fun onFirstContentfulPaint(session: GeckoSession) {
+            // Results pages are read as soon as they paint, not when every last resource is in.
+            if (serp is SerpState.Loading) extension.inject("serp")
+        }
+
+        override fun onContextMenu(session: GeckoSession, screenX: Int, screenY: Int, element: ContentDelegate.ContextElement) {
+            val link = element.linkUri ?: return
+            if (!isWebUrl(link)) return
+            contextMenuAt = SystemClock.uptimeMillis()
+            host.onLinkLongPress(link, element.title ?: element.linkText)
+        }
+
+        override fun onExternalResponse(session: GeckoSession, response: WebResponse) {
+            // Downloads: the phone is better at files.
+            host.openOnPhone(response.uri)
+        }
+
+        override fun onCrash(session: GeckoSession) {
+            Log.w(TAG, "Content process crashed at $url")
+            host.onRendererGone(readerUrl ?: url)
+        }
+
+        override fun onKill(session: GeckoSession) {
+            // On a 2 GB watch the system may kill the content process to reclaim memory.
+            Log.w(TAG, "Content process killed at $url")
+            host.onRendererGone(readerUrl ?: url)
+        }
+    }
+
+    private inner class History : HistoryDelegate {
+        override fun onHistoryStateChange(session: GeckoSession, historyList: HistoryDelegate.HistoryList) {
+            history = historyList.map { it.uri }
+            historyIndex = historyList.currentIndex
+            refreshNav()
+        }
+    }
+
+    /** uBlock Origin's toolbar badge is its blocked count for the page ("12", "1k"). */
+    private inner class BlockedBadge : WebExtension.ActionDelegate {
+        override fun onBrowserAction(extension: WebExtension, session: GeckoSession?, action: WebExtension.Action) {
+            blockedCount = parseBadge(action.badgeText)
         }
     }
 
@@ -991,21 +1032,25 @@ class BrowserController(
         private const val TAG = "OrbitBrowser"
         const val DEFAULT_SEARCH_TEMPLATE = "https://html.duckduckgo.com/html/?q=%s"
         private const val ZOOM_STEP = 1.12f
-        private const val SQUARE_FIT = 0.7071f
-        private const val DOUBLE_TAP_SETTLE_MS = 450L
         private val FALLBACK = Regex("S\\.browser_fallback_url=([^;]+)")
         private const val SERP_RETRY_MS = 700L
-
-        /** Caps on one element-hiding report: real pages stay far below these. */
-        private const val MAX_COSMETIC_NAMES = 4000
-        private const val MAX_COSMETIC_NAME = 200
-        private const val BLANK = "about:blank"
+        private const val RECENT_MS = 700L
         private const val STATE_URL = "orbit.url"
-        private const val MAX_STATE_BYTES = 256 * 1024
+        private const val STATE_SESSION = "orbit.session"
+        /** Bundles cross Binder: keep the saved session well under its 1 MB limit. */
+        private const val MAX_STATE_CHARS = 256 * 1024
+        private val SUBFRAME_SCHEMES = setOf("http", "https", "about", "data", "blob")
 
         fun isWebUrl(u: String?): Boolean =
             u != null && (u.startsWith("https://", ignoreCase = true) || u.startsWith("http://", ignoreCase = true))
 
         fun hostOf(url: String?): String? = Suggestions.siteKey(url)
+
+        /** "12" → 12, "1k" → 1000, "" or null → 0. */
+        fun parseBadge(text: String?): Int {
+            val t = text?.trim()?.lowercase().orEmpty()
+            val digits = t.takeWhile { it.isDigit() }.toIntOrNull() ?: return 0
+            return if (t.drop(digits.toString().length).startsWith("k")) digits * 1000 else digits
+        }
     }
 }

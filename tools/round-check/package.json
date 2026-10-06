@@ -2,16 +2,14 @@
   "name": "orbit-round-check",
   "private": true,
   "type": "module",
-  "description": "Headless-Chromium checks for Orbit's injected assets: round layout, circular reader pages, link focus, search results, element hiding.",
+  "description": "Headless checks for Orbit's page scripts (round layout, circular reader, link focus, search results) and unit tests for its GeckoView extension.",
   "scripts": {
-    "check": "node check.mjs && node reader-check.mjs && node links-check.mjs && node serp-check.mjs --no-live && node cosmetic-check.mjs",
+    "check": "node check.mjs && node reader-check.mjs && node links-check.mjs && node serp-check.mjs --no-live && node --test extension.test.mjs",
     "round": "node check.mjs",
     "reader": "node reader-check.mjs",
     "links": "node links-check.mjs",
     "serp": "node serp-check.mjs",
-    "cosmetic": "node cosmetic-check.mjs",
-    "filters": "node ../filters/compile.mjs",
-    "filters:test": "node --test ../filters/compile.test.mjs"
+    "extension": "node --test extension.test.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.1"
