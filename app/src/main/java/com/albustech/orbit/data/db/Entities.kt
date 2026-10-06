@@ -1,5 +1,6 @@
 package com.albustech.orbit.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -30,6 +31,8 @@ data class SiteSettings(
     val blockImages: Boolean = false,
     val javaScript: Boolean = true,
     val liteUserAgent: Boolean = false,
+    /** WebGL is off everywhere unless the site is opted in here ("Rich graphics"). */
+    @ColumnInfo(defaultValue = "0") val richGraphics: Boolean = false,
 )
 
 /**

@@ -47,6 +47,11 @@ object OrbitWebView {
             minimumLogicalFontSize = MIN_FONT_SIZE
             userAgentString = UserAgents.mobile(WebSettings.getDefaultUserAgent(context))
         }
+        // Safe Browsing stays off (the manifest opts out too): each check is a lookup Orbit
+        // doesn't want on a watch's link, and the interstitials don't fit a round screen.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            WebSettingsCompat.setSafeBrowsingEnabled(webView.settings, false)
+        }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, true)
         }

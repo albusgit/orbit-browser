@@ -20,10 +20,14 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.net.toUri
 import androidx.webkit.WebResourceErrorCompat
 import androidx.webkit.WebViewClientCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.albustech.orbit.browser.filters.Cosmetics
+import com.albustech.orbit.browser.filters.FilterEngine
+import com.albustech.orbit.browser.filters.Types
 import com.albustech.orbit.data.BrowserRepository
 import com.albustech.orbit.data.ReaderStyle
 import com.albustech.orbit.data.Suggestions
@@ -137,6 +141,10 @@ class BrowserController(
     var blockedCount by mutableIntStateOf(0)
         private set
 
+    /** Non-null while a search-results page is on: it's drawn natively, never shown as a page. */
+    var serp by mutableStateOf<SerpState?>(null)
+        private set
+
     // ---------------------------------------------------------------- settings in
 
     var searchTemplate: String = DEFAULT_SEARCH_TEMPLATE
@@ -154,8 +162,16 @@ class BrowserController(
     private val mobileUa = UserAgents.mobile(WebSettings.getDefaultUserAgent(webView.context))
     private val siteCache = HashMap<String, SiteSettings>()
     private val blockedCounter = AtomicInteger()
-    @Volatile private var blocklist: Blocklist? = null
+    @Volatile private var filters: FilterEngine? = null
+    private var cosmetics: Cosmetics? = null
     @Volatile private var blockingOn = true
+
+    /** The page on screen, for third-party and $domain= checks on the network threads. */
+    @Volatile private var topUrl: String? = null
+    @Volatile private var topHost: String? = null
+
+    /** Page-level filter exceptions ($document, $elemhide, $generichide) for [topUrl]. */
+    @Volatile private var pageFlags = 0
 
     private var appliedSiteKey: String? = null
     private var pendingExtract: String? = null
@@ -165,6 +181,14 @@ class BrowserController(
     private var readerReady = false
     /** Bumped per navigation; late blocked-count posts from the previous page are dropped. */
     @Volatile private var navGeneration = 0
+
+    /** Results pages are loaded without images or round layout; restore the site's settings after. */
+    private var serpOverride = false
+    private var serpRetried = false
+    /** Results pages whose extraction failed (CAPTCHA, consent): shown as ordinary pages from then on. */
+    private val serpFallback = HashSet<String>()
+    /** The card each results page was left on, so Back from a result returns to it. */
+    private val serpIndex = HashMap<String, Int>()
     private var linksActive = false
     private var clearHistoryOnNextLoad = false
     private var positionJob: Job? = null
@@ -185,13 +209,22 @@ class BrowserController(
         webView.webChromeClient = ChromeClient()
         webView.setDownloadListener { downloadUrl, _, _, _, _ -> host.openOnPhone(downloadUrl) }
         webView.setOnScrollChangeListener { _, _, y, _, _ -> onScrolled(y) }
-        Bridge(::onMessage).attach(webView)
+        Bridge(::onMessage, ::onFrameRequest).attach(webView)
+        injector.installCosmetics(webView)
         applySite(SiteSettings(host = ""))
+        injector.setWebGlAllowed(webView, emptySet())
         scope.launch {
             repo.allSiteSettings().forEach { siteCache[it.host] = it }
+            injector.setWebGlAllowed(webView, richGraphicsSites())
             reapplyCachedSite()
-            blocklist = withContext(Dispatchers.IO) {
-                webView.context.assets.open("blocklist.txt").bufferedReader().use { Blocklist.parse(it.readText()) }
+            val assets = webView.context.assets
+            // ~100k rules: index them off the main thread. Pages load unfiltered for that moment.
+            filters = withContext(Dispatchers.Default) {
+                assets.open("filters/network.txt").bufferedReader().use { FilterEngine.parse(it.readText()) }
+            }
+            pageFlags = filters?.pageFlags(topUrl) ?: 0
+            cosmetics = withContext(Dispatchers.Default) {
+                assets.open("filters/cosmetic.txt").bufferedReader().use { Cosmetics.parse(it.readText()) }
             }
         }
     }
@@ -214,7 +247,7 @@ class BrowserController(
         error = null
         hasPage = true
         url = target
-        applySiteFor(target)
+        prepareFor(target)
         webView.loadUrl(target)
     }
 
@@ -327,7 +360,7 @@ class BrowserController(
     private var lastAppliedRender = RenderMode.SCROLL
     private fun injectorWasZoom() = lastAppliedRender == RenderMode.ZOOM
 
-    /** Changes a per-site toggle (images, JavaScript, lite UA) and reloads to apply it. */
+    /** Changes a per-site toggle (images, JavaScript, lite UA, WebGL) and reloads to apply it. */
     fun updateSite(transform: (SiteSettings) -> SiteSettings) {
         val pageUrl = readerUrl ?: url ?: return
         val key = Suggestions.siteKey(pageUrl) ?: return
@@ -354,9 +387,13 @@ class BrowserController(
         }
     }
 
+    private fun richGraphicsSites(): Set<String> =
+        siteCache.values.filter { it.richGraphics }.mapTo(HashSet()) { it.host }
+
     private fun saveSite(s: SiteSettings) {
         siteCache[s.host] = s
         site = s
+        injector.setWebGlAllowed(webView, richGraphicsSites())
         scope.launch { repo.saveSiteSettings(s) }
     }
 
@@ -365,6 +402,69 @@ class BrowserController(
         if (key != null && key == appliedSiteKey) return
         appliedSiteKey = key
         applySite(key?.let { siteCache[it] ?: SiteSettings(host = it) } ?: SiteSettings(host = ""))
+    }
+
+    /** Site settings for [target], and the results-page treatment if it is one. */
+    private fun prepareFor(target: String?) {
+        if (serpOverride) {
+            serpOverride = false
+            appliedSiteKey = null // re-apply the real site settings (images, layout)
+        }
+        applySiteFor(target)
+        val page = target?.let(Serp::detect)
+        if (page == null || key(target) in serpFallback) {
+            serp = null
+            return
+        }
+        serpOverride = true
+        if (serp?.let { key(it.url) } != key(target)) serp = SerpState.Loading(page, target)
+        // Never shown as a page: skip its images and the round layout.
+        webView.settings.blockNetworkImage = true
+        injector.setRoundLayout(webView, false)
+    }
+
+    fun serpIndexFor(pageUrl: String): Int = serpIndex[key(pageUrl)] ?: 0
+
+    fun rememberSerpIndex(pageUrl: String, index: Int) {
+        serpIndex[key(pageUrl)] = index
+    }
+
+    private fun onSerp(msg: JSONObject) {
+        val state = serp ?: return
+        // Engines rewrite their URL after load (Google adds parameters): match on the search itself.
+        if (Serp.detect(msg.optString("url")) != state.page) return
+        val raw = msg.optJSONArray("results")
+        val seen = HashSet<String>()
+        val results = buildList {
+            for (i in 0 until (raw?.length() ?: 0)) {
+                val r = raw!!.optJSONObject(i) ?: continue
+                val target = Serp.decodeResultUrl(r.optString("href"), state.page.site) ?: continue
+                val title = r.optString("title").trim()
+                if (title.isEmpty() || !seen.add(key(target))) continue
+                add(SerpResult(title, target, Serp.displayHost(target), r.optString("snippet").trim()))
+            }
+        }
+        if (results.isEmpty()) {
+            if (isLoading) return // the finished page gets another try
+            if (!serpRetried) {
+                serpRetried = true
+                main.postDelayed({ if (serp is SerpState.Loading) injector.extractSerp(webView) }, SERP_RETRY_MS)
+                return
+            }
+            // CAPTCHA, consent screen or an unknown layout: show the real page instead.
+            Log.i(TAG, "No results found on ${state.url}; showing the page")
+            serpFallback.add(key(state.url))
+            serp = null
+            serpOverride = false
+            appliedSiteKey = null
+            applySiteFor(state.url)
+            webView.reload()
+            return
+        }
+        val answer = msg.optString("answer").trim().ifEmpty { null }
+        serp = SerpState.Ready(
+            SerpData(state.page, state.url, results, answer, Serp.nextUrl(state.page, raw?.length() ?: 0)),
+        )
     }
 
     private fun applySite(s: SiteSettings) {
@@ -558,7 +658,13 @@ class BrowserController(
 
     private fun onLinksMessage(msg: JSONObject) {
         when (msg.optString("event")) {
-            "focus" -> focusedLink = LinkFocus(msg.optString("href"), msg.optString("label"), msg.optString("kind"))
+            "focus" -> focusedLink = LinkFocus(
+                msg.optString("href"),
+                msg.optString("label"),
+                msg.optString("kind"),
+                msg.optInt("index"),
+                msg.optInt("count"),
+            )
             "activate" -> if (msg.optString("kind") == "input") webView.requestFocus() // keyboard needs focus
             "none" -> focusedLink = null
             "edge" -> host.onEdge()
@@ -571,6 +677,7 @@ class BrowserController(
             "article" -> onArticle(msg)
             "reader" -> onReaderMessage(msg)
             "links" -> onLinksMessage(msg)
+            "serp" -> onSerp(msg)
         }
     }
 
@@ -674,6 +781,37 @@ class BrowserController(
         armWatchdog()
     }
 
+    /**
+     * The main frame moved to [target]: what third-party and page exceptions are judged by.
+     * Called from the network thread too, hence the @Volatile fields.
+     */
+    private fun onFilterPage(target: String?) {
+        topUrl = target
+        topHost = target?.toUri()?.host
+        pageFlags = filters?.pageFlags(target) ?: 0
+    }
+
+    /**
+     * Element hiding for a frame (cosmetic.js): its site rules on the first ask, then the generic
+     * rules for the ids and classes it reports. Not for Orbit's own reader or results pages.
+     */
+    private fun onFrameRequest(type: String, msg: JSONObject, origin: Uri, reply: (String) -> Unit) {
+        if (type != "cosmetic" || !blockingOn || readerUrl != null || serp != null) return
+        val c = cosmetics ?: return
+        val host = origin.host ?: return
+        val css = buildString {
+            if (msg.optBoolean("first")) append(c.siteCss(host, pageFlags))
+            append(c.genericCss(host, pageFlags, msg.optJSONArray("ids").strings(), msg.optJSONArray("classes").strings()))
+        }
+        if (css.isNotEmpty()) reply(css)
+    }
+
+    private fun org.json.JSONArray?.strings(): List<String> {
+        if (this == null) return emptyList()
+        val n = minOf(length(), MAX_COSMETIC_NAMES)
+        return List(n) { optString(it) }.filter { it.isNotEmpty() && it.length <= MAX_COSMETIC_NAME }
+    }
+
     /** Applies the blocking setting; read on the network thread in shouldInterceptRequest. */
     fun setBlocking(on: Boolean) {
         blockingOn = on
@@ -699,11 +837,13 @@ class BrowserController(
             readerUrl = reading
             readerReady = false
             navGeneration++
+            serpRetried = false
             if (reading == null) {
                 reader = null
                 readerTitle = null
-                applySiteFor(pageUrl)
+                prepareFor(pageUrl)
             } else {
+                serp = null
                 // The article's own site settings, but the reader always needs its script
                 // (page scripts are blocked by its CSP either way).
                 applySiteFor(reading)
@@ -713,6 +853,7 @@ class BrowserController(
             progress = 0
             error = null
             url = reading ?: pageUrl
+            onFilterPage(reading ?: pageUrl)
             scrollFraction = 0f
             blockedCounter.set(0)
             blockedCount = 0
@@ -726,7 +867,7 @@ class BrowserController(
         }
 
         override fun onPageCommitVisible(view: WebView, pageUrl: String) {
-            injector.injectLate(view)
+            if (serp != null) injector.extractSerp(view) else injector.injectLate(view)
         }
 
         override fun onPageFinished(view: WebView, pageUrl: String?) {
@@ -741,6 +882,11 @@ class BrowserController(
             refreshNav()
             memoryLog.onPageLoaded(pageUrl)
             if (readerUrl != null || pageUrl == null || error != null || !pageUrl.startsWith("http")) return
+            if (serp != null) {
+                injector.extractSerp(view)
+                scope.launch { repo.recordVisit(pageUrl, view.title) }
+                return
+            }
             injector.injectLate(view)
             host.onPageCommitted(pageUrl)
             scope.launch { repo.recordVisit(pageUrl, view.title) }
@@ -759,7 +905,7 @@ class BrowserController(
             val uri = request.url
             when (uri.scheme?.lowercase()) {
                 "http", "https" -> {
-                    if (request.isForMainFrame) applySiteFor(uri.toString())
+                    if (request.isForMainFrame) prepareFor(uri.toString())
                     return false
                 }
                 "about", "data", "blob" -> return false
@@ -779,9 +925,18 @@ class BrowserController(
         }
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-            if (!blockingOn || request.isForMainFrame) return null
-            val list = blocklist ?: return null
-            if (!list.isBlocked(request.url.host)) return null
+            if (request.isForMainFrame) {
+                // The earliest sign of the new page (redirects included): judge its subresources
+                // against it, not the page before, even if they arrive before onPageStarted.
+                onFilterPage(request.url.toString())
+                return null
+            }
+            if (!blockingOn) return null
+            val engine = filters ?: return null
+            if (pageFlags and Types.DOCUMENT != 0) return null
+            val target = request.url.toString()
+            val type = Types.guess(target, request.requestHeaders["Accept"] ?: request.requestHeaders["accept"])
+            if (!engine.shouldBlock(target, topHost, type)) return null
             val n = blockedCounter.incrementAndGet()
             val gen = navGeneration
             main.post { if (gen == navGeneration) blockedCount = n }
@@ -799,6 +954,7 @@ class BrowserController(
             val conn = connection.current()
             val kind = if (conn == ConnectionType.NONE) PageError.Kind.OFFLINE else PageError.kindFor(code)
             error = PageError(request.url.toString(), kind, detail, conn)
+            serp = null
         }
 
         @SuppressLint("WebViewClientOnReceivedSslError") // Always cancels: never proceeds past a bad certificate.
@@ -838,6 +994,11 @@ class BrowserController(
         private const val SQUARE_FIT = 0.7071f
         private const val DOUBLE_TAP_SETTLE_MS = 450L
         private val FALLBACK = Regex("S\\.browser_fallback_url=([^;]+)")
+        private const val SERP_RETRY_MS = 700L
+
+        /** Caps on one element-hiding report: real pages stay far below these. */
+        private const val MAX_COSMETIC_NAMES = 4000
+        private const val MAX_COSMETIC_NAME = 200
         private const val BLANK = "about:blank"
         private const val STATE_URL = "orbit.url"
         private const val MAX_STATE_BYTES = 256 * 1024

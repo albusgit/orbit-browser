@@ -57,10 +57,27 @@ fun BottomCurvedLabel(text: String?, modifier: Modifier = Modifier) {
     }
 }
 
+/** A static label curved along the bottom edge (the launcher's highlighted slot or hint). */
+@Composable
+fun BottomCurvedText(text: String?, maxSweepAngle: Float = 150f) {
+    if (text.isNullOrEmpty()) return
+    val color = MaterialTheme.colorScheme.onSurface
+    CurvedLayout(modifier = Modifier.fillMaxSize().padding(6.dp), anchor = 90f) {
+        curvedText(
+            text = text,
+            color = color,
+            fontSize = 13.sp,
+            maxSweepAngle = maxSweepAngle,
+            overflow = TextOverflow.Ellipsis,
+            angularDirection = androidx.wear.compose.foundation.CurvedDirection.Angular.CounterClockwise,
+        )
+    }
+}
+
 /** Muted curved text along the top, used on the ambient screen. */
 @Composable
-fun TopCurvedText(text: String, color: Color) {
+fun TopCurvedText(text: String, color: Color, maxSweepAngle: Float = 140f) {
     CurvedLayout(modifier = Modifier.fillMaxSize().padding(4.dp), anchor = 270f) {
-        curvedText(text, color = color, maxSweepAngle = 140f, overflow = TextOverflow.Ellipsis)
+        curvedText(text, color = color, maxSweepAngle = maxSweepAngle, overflow = TextOverflow.Ellipsis)
     }
 }

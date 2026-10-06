@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -17,17 +16,19 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -40,12 +41,13 @@ import com.albustech.orbit.browser.BezelMode
 import com.albustech.orbit.browser.BrowserController
 import com.albustech.orbit.browser.ConnectionMonitor
 import com.albustech.orbit.browser.ConnectionType
-import com.albustech.orbit.browser.RenderMode
 import com.albustech.orbit.browser.TabManager
 import com.albustech.orbit.data.BrowserRepository
 import com.albustech.orbit.data.Settings
 import com.albustech.orbit.data.SettingsRepository
 import com.albustech.orbit.data.Suggestions
+import com.albustech.orbit.data.db.Bookmark
+import com.albustech.orbit.data.db.HistoryEntry
 import com.albustech.orbit.data.db.SiteMode
 import com.albustech.orbit.input.BezelInput
 import kotlinx.coroutines.delay
@@ -74,9 +76,10 @@ class OrbitDeps(
     val actions: AppActions,
 )
 
-/** Screens that open over the page. Back closes the top one. */
+/** Screens that open over the page. Back (or a swipe on the rings) closes the top one. */
 sealed interface Overlay {
-    data object Menu : Overlay
+    data object Ring : Overlay
+    data object More : Overlay
     data object Entry : Overlay
     data object Bookmarks : Overlay
     data object History : Overlay
@@ -88,23 +91,24 @@ sealed interface Overlay {
 }
 
 /**
- * The browser: one WebView under round-aware chrome.
- *
- * Immersive by default: time and title show while a page loads and hide on the first scroll;
- * a plain tap near the centre opens the menu. The bezel does what [BezelMode] says unless an
- * overlay is open (then the overlay's list takes rotary focus). Long-press the centre to switch
- * bezel mode; long-press a link for its radial menu. In link mode a tap anywhere opens the
- * focused link.
+ * The browser, round-native (design section 3):
+ * - no page: the orbit launcher;
+ * - a page: immersive, with the bezel-mode arc and "host · time" while the chrome shows;
+ *   a tap in the centre opens the ring menu, a long press on a link opens its wedges;
+ * - link mode: a counter on top and one explicit "Open link" button;
+ * - a search-results page: native result cards instead of the page.
  */
 @Composable
 fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
     val c = deps.controller
     val bezel = deps.bezel
+    val geometry = deps.geometry
     val scope = rememberCoroutineScope()
+    val resources = LocalResources.current
     val overlays = remember { mutableStateListOf<Overlay>() }
     var chromeVisible by remember { mutableStateOf(true) }
     var label by remember { mutableStateOf<String?>(null) }
-    var labelTick by remember { mutableStateOf(0) }
+    var labelTick by remember { mutableIntStateOf(0) }
     var phoneDialog by remember { mutableStateOf(false) }
     val rootFocus = remember { FocusRequester() }
 
@@ -113,32 +117,33 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
     val history by deps.repo.history.collectAsState(initial = emptyList())
     val lastRead by deps.repo.latestPosition.collectAsState(initial = null)
     val pageUrl = c.readerUrl ?: c.url
+    val host = Suggestions.siteKey(pageUrl)
     val bookmarked by remember(pageUrl) { pageUrl?.let { deps.repo.isBookmarked(it) } ?: flowOf(false) }
         .collectAsState(initial = false)
+    val serp = c.serp
+    val onPage = c.hasPage && serp == null
 
-    fun show(text: String) {
+    fun show(text: String?) {
         label = text
         labelTick++
     }
+    fun closeAll() = overlays.clear()
     fun open(target: String) {
-        overlays.clear()
-        if (!c.open(target)) return
+        closeAll()
+        c.open(target)
     }
-    fun openOnPhone(url: String) {
-        deps.actions.openOnPhone(url) { ok -> if (ok) phoneDialog = true }
-    }
+    fun openOnPhone(url: String) = deps.actions.openOnPhone(url) { ok -> if (ok) phoneDialog = true }
     fun toggleBookmark(url: String, title: String?, isMarked: Boolean) {
         scope.launch { deps.repo.toggleBookmark(url, title, isMarked) }
-        deps.actions.toast(deps.controller.webView.context.getString(if (isMarked) R.string.removed_bookmark else R.string.added_bookmark))
+        deps.actions.toast(resources.getString(if (isMarked) R.string.removed_bookmark else R.string.added_bookmark))
+    }
+    fun cycleBezel() {
+        c.cycleBezelMode()
+        bezel.haptics.confirm()
+        chromeVisible = true
     }
 
-    val modeNames = mapOf(
-        BezelMode.SCROLL to stringResource(if (c.renderMode == RenderMode.READER) R.string.bezel_pages else R.string.bezel_scroll),
-        BezelMode.LINKS to stringResource(R.string.bezel_links),
-        BezelMode.ZOOM to stringResource(if (c.renderMode == RenderMode.READER) R.string.bezel_text else R.string.bezel_zoom),
-    )
-    val currentModeNames by androidx.compose.runtime.rememberUpdatedState(modeNames)
-
+    val cycleBezelState by rememberUpdatedState(::cycleBezel)
     DisposableEffect(bezel, c) {
         bezel.onDetents = { n, t ->
             c.onBezel(n, bezel.stepPx, t)
@@ -148,15 +153,8 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
             chromeVisible = false
             deps.actions.onUserActivity()
         }
-        bezel.onCenterTap = {
-            chromeVisible = true
-            overlays.add(Overlay.Menu)
-        }
-        bezel.onCenterLongPress = {
-            val mode = c.cycleBezelMode()
-            bezel.haptics.confirm()
-            show(currentModeNames[mode].orEmpty())
-        }
+        bezel.onCenterTap = { overlays.add(Overlay.Ring) }
+        bezel.onCenterLongPress = { cycleBezelState() }
         bezel.onLinkLongPress = { url, title -> overlays.add(Overlay.Link(url, title)) }
         bezel.onDoubleTap = c::onDoubleTap
         onDispose {
@@ -168,61 +166,48 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
             bezel.onLinkLongPress = { _, _ -> }
         }
     }
-    SideEffect { bezel.enabled = c.hasPage && overlays.isEmpty() && !ambient }
+    SideEffect { bezel.enabled = onPage && overlays.isEmpty() && !ambient }
 
-    // Labels fade after a moment.
     LaunchedEffect(labelTick) {
         if (label != null) {
             delay(1400)
             label = null
         }
     }
-    // "4 / 12" after each page turn.
     val reader = c.reader
     val pageLabel = reader?.let {
         if (it.done) stringResource(R.string.page_of, it.page + 1, it.total)
         else stringResource(R.string.page_of_more, it.page + 1, it.total)
     }
-    LaunchedEffect(reader?.page) {
-        if (reader != null && reader.total > 0) {
-            label = pageLabel
-            labelTick++
-        }
-    }
+    LaunchedEffect(reader?.page) { if (reader != null && reader.total > 0) show(pageLabel) }
     LaunchedEffect(c.isLoading) { if (c.isLoading) chromeVisible = true }
-    LaunchedEffect(c.focusedLink) {
-        val f = c.focusedLink
-        if (f != null && c.bezelMode == BezelMode.LINKS) {
-            label = f.label.ifBlank { Suggestions.displayUrl(f.href) }.take(40)
-            labelTick++
-        }
-    }
+    LaunchedEffect(overlays.size) { if (overlays.isEmpty()) chromeVisible = true }
 
-    // Hold rotary focus on the root whenever no overlay needs it.
-    LaunchedEffect(overlays.size, c.hasPage) { if (overlays.isEmpty() && c.hasPage) rootFocus.requestFocus() }
+    // Hold rotary focus on the root whenever the page itself is in front.
+    LaunchedEffect(overlays.size, onPage) { if (overlays.isEmpty() && onPage) rootFocus.requestFocus() }
     LifecycleResumeEffect(Unit) {
-        if (overlays.isEmpty() && c.hasPage) rootFocus.requestFocus()
+        if (overlays.isEmpty() && onPage) rootFocus.requestFocus()
         onPauseOrDispose { c.stopScrolling() }
     }
 
     // Later handlers win: an open overlay closes before history goes back. With no history,
     // Back is left to the system and leaves the app.
-    BackHandler(enabled = c.hasPage && (c.canGoBack || c.bezelMode == BezelMode.LINKS)) {
-        if (c.bezelMode == BezelMode.LINKS) show(currentModeNames[BezelMode.SCROLL].orEmpty())
-        c.back()
-    }
+    BackHandler(enabled = c.hasPage && (c.canGoBack || c.bezelMode == BezelMode.LINKS)) { c.back() }
     BackHandler(enabled = overlays.isNotEmpty()) { overlays.removeAt(overlays.lastIndex) }
 
     val entry = rememberUrlEntry(choices = bookmarks.take(5).map { Suggestions.displayUrl(it.url) }) { open(it) }
+    val linkMode = onPage && c.bezelMode == BezelMode.LINKS && overlays.isEmpty()
+    val top = overlays.lastOrNull()
+    val listOverlay = top != null && top !is Overlay.Ring && top !is Overlay.More && top !is Overlay.Link && top !is Overlay.TextSize
 
     AppScaffold(
         timeText = {
             AnimatedVisibility(
-                visible = !ambient && (chromeVisible || overlays.isNotEmpty() || !c.hasPage),
+                visible = !ambient && !linkMode && (listOverlay || (overlays.isEmpty() && (serp == null || !c.hasPage) && (chromeVisible || !c.hasPage))),
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
-                TitleTimeText(if (c.hasPage && overlays.isEmpty()) c.title ?: Suggestions.siteKey(pageUrl) else null)
+                TitleTimeText(if (onPage && overlays.isEmpty()) host else null)
             }
         },
     ) {
@@ -236,77 +221,91 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
         ) {
             AndroidView(
                 factory = { c.webView.also { (it.parent as? ViewGroup)?.removeView(it) } },
-                update = { it.visibility = if (c.hasPage) View.VISIBLE else View.INVISIBLE },
+                update = { it.visibility = if (onPage) View.VISIBLE else View.INVISIBLE },
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // Link mode: a tap anywhere opens the focused link; long-press for its menu.
-            if (c.hasPage && c.bezelMode == BezelMode.LINKS && overlays.isEmpty()) {
-                Box(
-                    Modifier.fillMaxSize().pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { c.activateFocusedLink() },
-                            onLongPress = { p ->
-                                if (deps.geometry.isNearCenter(p.x, p.y)) {
-                                    val mode = c.cycleBezelMode()
-                                    bezel.haptics.confirm()
-                                    show(currentModeNames[mode].orEmpty())
-                                } else {
-                                    c.focusedLink?.takeIf { it.href.isNotEmpty() }?.let {
-                                        overlays.add(Overlay.Link(it.href, it.label))
-                                    }
-                                }
-                            },
-                        )
-                    },
+            if (!c.hasPage) {
+                Launcher(
+                    geometry = geometry,
+                    slots = launcherSlots(lastRead, bookmarks, onType = { entry.type() }, onOpen = { url -> closeAll(); c.loadUrl(url) },
+                        onMore = { overlays.add(Overlay.Ring) }, onTabs = { overlays.add(Overlay.Tabs) }, onHistory = { overlays.add(Overlay.History) }),
+                    micLabel = stringResource(R.string.action_voice),
+                    hint = if (settings.bezelHintSeen) null else stringResource(R.string.bezel_hint),
+                    onSpeak = entry::speak,
+                    onBezelUsed = deps.settingsRepo::setBezelHintSeen,
                 )
             }
 
-            if (!c.hasPage) {
-                HomeScreen(
-                    lastRead = lastRead,
-                    bookmarks = bookmarks,
-                    onSpeak = entry::speak,
-                    onType = { entry.type() },
-                    onOpen = { url -> overlays.clear(); c.loadUrl(url) },
-                    onMenu = { overlays.add(Overlay.Menu) },
+            if (serp != null && c.hasPage) {
+                SerpScreen(
+                    geometry = geometry,
+                    state = serp,
+                    startIndex = c.serpIndexFor(serp.url),
+                    onIndex = { i -> c.rememberSerpIndex(serp.url, i) },
+                    onOpen = { url -> c.loadUrl(url) },
+                    onEdit = { entry.type() },
+                    onVoice = entry::speak,
+                )
+            }
+
+            if (linkMode) {
+                TapToShowChrome(geometry, onTap = { chromeVisible = true }, onCenterHold = ::cycleBezel)
+                val f = c.focusedLink
+                LinkModeControls(
+                    geometry = geometry,
+                    counter = f?.takeIf { it.count > 0 }?.let { stringResource(R.string.link_position, it.index + 1, it.count) },
+                    hasLink = f != null,
+                    onOpen = c::activateFocusedLink,
+                    onOptions = { f?.takeIf { it.href.isNotEmpty() }?.let { overlays.add(Overlay.Link(it.href, it.label)) } },
                 )
             }
 
             c.error?.let { err ->
                 val (title, detail) = err.message()
-                ErrorScreen(
-                    geometry = deps.geometry,
-                    title = title,
-                    detail = detail,
-                    onRetry = c::reload,
-                )
+                ErrorScreen(geometry = geometry, title = title, detail = detail, onRetry = c::reload)
             }
 
             if (c.hasPage) {
                 val reading = c.reader
                 EdgeOverlay(
-                    geometry = deps.geometry,
-                    loadingProgress = if (c.isLoading) c.progress / 100f else null,
-                    indicator = when {
-                        reading != null -> EdgeIndicator.Pages(reading.page, reading.total)
-                        else -> EdgeIndicator.Scroll(c.scrollFraction)
+                    geometry = geometry,
+                    loadingProgress = { if (c.isLoading) c.progress / 100f else null },
+                    indicator = {
+                        when {
+                            c.serp != null -> EdgeIndicator.None
+                            reading != null -> EdgeIndicator.Pages(reading.page, reading.total)
+                            else -> EdgeIndicator.Scroll(c.scrollFraction)
+                        }
                     },
                     indicatorVisible = label != null || chromeVisible,
                 )
             }
 
-            BottomCurvedLabel(if (overlays.isEmpty() && !ambient) label else null)
+            if (onPage && overlays.isEmpty()) {
+                val modes = listOf(BezelMode.SCROLL, BezelMode.LINKS, BezelMode.ZOOM)
+                BezelModeArc(
+                    geometry = geometry,
+                    labels = modes.map { bezelLabel(it, c.renderMode) },
+                    selected = modes.indexOf(c.bezelMode),
+                    visible = chromeVisible,
+                    onSelect = { i ->
+                        c.setBezel(modes[i])
+                        bezel.haptics.confirm()
+                    },
+                )
+                BottomCurvedLabel(if (!ambient && !chromeVisible) label else null)
+            }
 
-            overlays.lastOrNull()?.let { top ->
-                OverlayContent(top, deps, settings, connection, bookmarked, bookmarks, history, overlays, entry,
+            top?.let { overlay ->
+                OverlayContent(overlay, deps, settings, connection, bookmarked, bookmarks, history, overlays, entry,
                     ::open, ::openOnPhone, ::toggleBookmark)
             }
 
             if (ambient) {
                 val r = c.reader
                 AmbientScreen(
-                    geometry = deps.geometry,
+                    geometry = geometry,
                     title = if (c.hasPage) c.title else null,
                     position = r?.let { stringResource(R.string.page_of, it.page + 1, it.total) },
                 )
@@ -323,6 +322,37 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
     )
 }
 
+/** Launcher satellites: keyboard, continue reading (or tabs), up to three bookmarks, More. */
+@Composable
+private fun launcherSlots(
+    lastRead: com.albustech.orbit.data.db.ReadingPosition?,
+    bookmarks: List<Bookmark>,
+    onType: () -> Unit,
+    onOpen: (String) -> Unit,
+    onMore: () -> Unit,
+    onTabs: () -> Unit,
+    onHistory: () -> Unit,
+): List<LauncherSlot> {
+    val keyboard = LauncherSlot(stringResource(R.string.action_keyboard), icon = R.drawable.ic_keyboard, onClick = onType)
+    val second = lastRead?.let {
+        LauncherSlot(
+            stringResource(R.string.continue_title, it.title?.takeIf { t -> t.isNotBlank() } ?: Suggestions.displayUrl(it.url)),
+            icon = R.drawable.ic_article,
+            accent = true,
+            onClick = { onOpen(it.url) },
+        )
+    } ?: LauncherSlot(stringResource(R.string.menu_tabs), icon = R.drawable.ic_tabs, onClick = onTabs)
+    val marks = bookmarks.take(3).map { b ->
+        LauncherSlot(b.title, host = Suggestions.siteKey(b.url) ?: b.url, onClick = { onOpen(b.url) })
+    }
+    val fillers = listOf(
+        LauncherSlot(stringResource(R.string.menu_history), icon = R.drawable.ic_history, onClick = onHistory),
+        LauncherSlot(stringResource(R.string.menu_tabs), icon = R.drawable.ic_tabs, onClick = onTabs),
+    ).filter { f -> f.label != second.label }
+    val middle = (marks + fillers).take(3)
+    return listOf(keyboard, second) + middle + LauncherSlot(stringResource(R.string.action_more), icon = R.drawable.ic_more, onClick = onMore)
+}
+
 @Composable
 private fun OverlayContent(
     top: Overlay,
@@ -330,8 +360,8 @@ private fun OverlayContent(
     settings: Settings,
     connection: ConnectionType,
     bookmarked: Boolean,
-    bookmarks: List<com.albustech.orbit.data.db.Bookmark>,
-    history: List<com.albustech.orbit.data.db.HistoryEntry>,
+    bookmarks: List<Bookmark>,
+    history: List<HistoryEntry>,
     overlays: MutableList<Overlay>,
     entry: UrlEntry,
     open: (String) -> Unit,
@@ -341,50 +371,66 @@ private fun OverlayContent(
     val c = deps.controller
     val scope = rememberCoroutineScope()
     val pageUrl = c.readerUrl ?: c.url
+    val host = Suggestions.siteKey(pageUrl)
+    val onPage = c.hasPage
     fun push(o: Overlay) = overlays.add(o)
+    fun pop() { if (overlays.isNotEmpty()) overlays.removeAt(overlays.lastIndex) }
     fun close() = overlays.clear()
-    fun cycleView() {
-        val next = SiteMode.entries[(c.site.mode.ordinal + 1) % SiteMode.entries.size]
-        c.setSiteMode(next)
-    }
+    val nextMode = SiteMode.entries[(c.site.mode.ordinal + 1) % SiteMode.entries.size]
 
     when (top) {
-        Overlay.Menu -> MainMenu(
-            MenuState(
-                title = if (c.hasPage) c.title else null,
-                host = Suggestions.siteKey(pageUrl),
-                hasPage = c.hasPage,
-                isLoading = c.isLoading,
-                canGoBack = c.canGoBack,
-                canGoForward = c.canGoForward,
-                siteMode = c.site.mode,
-                renderMode = c.renderMode,
-                bezelMode = c.bezelMode,
-                bookmarked = bookmarked,
-                connection = connection,
-                blocked = c.blockedCount,
-                tabCount = deps.tabs.tabs.size,
-                maxTabs = TabManager.MAX_TABS,
-            ),
-            MenuActions(
-                goTo = { push(Overlay.Entry) },
-                speak = entry::speak,
-                back = { close(); c.back() },
-                forward = { close(); c.forward() },
-                reloadOrStop = { close(); c.reloadOrStop() },
-                cycleView = ::cycleView,
-                cycleBezel = { c.cycleBezelMode(); close() },
-                toggleBookmark = { pageUrl?.let { toggleBookmark(it, c.title, bookmarked) } },
-                bookmarks = { push(Overlay.Bookmarks) },
-                history = { push(Overlay.History) },
-                tabs = { push(Overlay.Tabs) },
-                textSize = { push(Overlay.TextSize) },
-                openOnPhone = { pageUrl?.let(openOnPhone) },
-                site = { push(Overlay.Site) },
-                settings = { push(Overlay.Settings) },
-                home = { close(); c.showHome() },
+        Overlay.Ring -> RingMenu(
+            geometry = deps.geometry,
+            subtitle = host,
+            hint = stringResource(R.string.tap_to_confirm),
+            onDismiss = ::pop,
+            items = listOf(
+                RingItem(R.drawable.ic_search, stringResource(R.string.action_search)) { push(Overlay.Entry) },
+                RingItem(R.drawable.ic_forward, stringResource(R.string.action_forward), enabled = onPage && c.canGoForward) { close(); c.forward() },
+                RingItem(
+                    if (c.isLoading) R.drawable.ic_close else R.drawable.ic_reload,
+                    stringResource(if (c.isLoading) R.string.action_stop else R.string.action_reload),
+                    enabled = onPage,
+                ) { close(); c.reloadOrStop() },
+                RingItem(
+                    if (bookmarked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_border,
+                    stringResource(if (bookmarked) R.string.action_bookmarked else R.string.action_bookmark),
+                    enabled = onPage && pageUrl != null,
+                ) { pageUrl?.let { toggleBookmark(it, c.title, bookmarked) }; close() },
+                RingItem(R.drawable.ic_tabs, stringResource(R.string.menu_tabs_count, deps.tabs.tabs.size, TabManager.MAX_TABS)) { push(Overlay.Tabs) },
+                RingItem(R.drawable.ic_history, stringResource(R.string.menu_history)) { push(Overlay.History) },
+                RingItem(R.drawable.ic_more, stringResource(R.string.action_more)) { push(Overlay.More) },
+                RingItem(R.drawable.ic_back, stringResource(R.string.action_back), enabled = onPage && c.canGoBack) { close(); c.back() },
             ),
         )
+        Overlay.More -> {
+            val status = buildList {
+                add(connectionLabel(connection))
+                if (c.blockedCount > 0) add(androidx.compose.ui.res.pluralStringResource(R.plurals.blocked_count, c.blockedCount, c.blockedCount))
+            }.joinToString(" · ")
+            RingMenu(
+                geometry = deps.geometry,
+                subtitle = status,
+                hint = stringResource(R.string.tap_to_confirm),
+                onDismiss = ::pop,
+                items = listOf(
+                    RingItem(R.drawable.ic_article, stringResource(R.string.view_next, siteModeLabel(nextMode)), enabled = onPage) {
+                        close()
+                        c.setSiteMode(nextMode)
+                    },
+                    RingItem(R.drawable.ic_text_size, stringResource(R.string.menu_text_size), enabled = onPage) { push(Overlay.TextSize) },
+                    RingItem(R.drawable.ic_tune, stringResource(R.string.menu_site), enabled = onPage && host != null) { push(Overlay.Site) },
+                    RingItem(R.drawable.ic_phone, stringResource(R.string.action_open_on_phone), enabled = onPage && pageUrl != null) {
+                        close()
+                        pageUrl?.let(openOnPhone)
+                    },
+                    RingItem(R.drawable.ic_bookmark, stringResource(R.string.menu_bookmarks)) { push(Overlay.Bookmarks) },
+                    RingItem(R.drawable.ic_settings, stringResource(R.string.menu_settings)) { push(Overlay.Settings) },
+                    RingItem(R.drawable.ic_home, stringResource(R.string.action_home), enabled = onPage) { close(); c.showHome() },
+                    RingItem(R.drawable.ic_close, stringResource(R.string.action_close)) { close() },
+                ),
+            )
+        }
         Overlay.Entry -> UrlEntryScreen(
             searchTemplate = settings.searchTemplate,
             recentSites = bookmarks.take(5).map { Suggestions.displayUrl(it.url) },
@@ -404,16 +450,16 @@ private fun OverlayContent(
         Overlay.Tabs -> TabsScreen(deps.tabs, onDone = ::close)
         Overlay.Settings -> SettingsScreen(
             settings = settings,
-            onSearch = { t -> scope.launch { deps.settingsRepo.setSearchTemplate(t) } },
-            onBlock = { v -> scope.launch { deps.settingsRepo.setBlockTrackers(v) } },
-            onKeepOn = { v -> scope.launch { deps.settingsRepo.setKeepScreenOn(v) } },
-            onSerif = { v -> scope.launch { deps.settingsRepo.setReaderStyle(settings.reader.copy(serif = v)) } },
+            onSearch = deps.settingsRepo::setSearchTemplate,
+            onBlock = deps.settingsRepo::setBlockTrackers,
+            onKeepOn = deps.settingsRepo::setKeepScreenOn,
+            onSerif = { v -> deps.settingsRepo.setReaderStyle(settings.reader.copy(serif = v)) },
             onClearHistory = { scope.launch { deps.repo.clearHistory() } },
         )
         Overlay.Site -> SiteSettingsScreen(
-            host = Suggestions.siteKey(pageUrl) ?: "",
+            host = host ?: "",
             site = c.site,
-            onCycleView = ::cycleView,
+            onCycleView = { c.setSiteMode(nextMode) },
             onUpdate = c::updateSite,
         )
         Overlay.TextSize -> TextSizeScreen(
@@ -421,21 +467,26 @@ private fun OverlayContent(
             reader = c.readerUrl != null,
             style = settings.reader,
             textZoom = settings.textZoom,
-            onStyle = { s -> scope.launch { deps.settingsRepo.setReaderStyle(s) } },
-            onZoom = { z -> scope.launch { deps.settingsRepo.setTextZoom(z) } },
+            onStyle = deps.settingsRepo::setReaderStyle,
+            onZoom = deps.settingsRepo::setTextZoom,
         )
         is Overlay.Link -> {
             val marked by remember(top.url) { deps.repo.isBookmarked(top.url) }.collectAsState(initial = false)
-            LinkMenu(
+            RingMenu(
                 geometry = deps.geometry,
-                url = top.url,
-                title = top.title,
-                bookmarked = marked,
-                onOpen = { close(); c.loadUrl(top.url) },
-                onOpenOnPhone = { close(); openOnPhone(top.url) },
-                onBookmark = { toggleBookmark(top.url, top.title, marked); close() },
-                onCopy = { deps.actions.copyLink(top.url); close() },
-                onDismiss = ::close,
+                title = top.title?.takeIf { it.isNotBlank() } ?: Suggestions.displayUrl(top.url),
+                subtitle = Suggestions.displayUrl(top.url),
+                hint = stringResource(R.string.tap_to_confirm),
+                onDismiss = ::pop,
+                items = listOf(
+                    RingItem(R.drawable.ic_open, stringResource(R.string.action_open)) { close(); c.loadUrl(top.url) },
+                    RingItem(R.drawable.ic_phone, stringResource(R.string.action_phone)) { close(); openOnPhone(top.url) },
+                    RingItem(R.drawable.ic_copy, stringResource(R.string.action_copy)) { deps.actions.copyLink(top.url); close() },
+                    RingItem(
+                        if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_border,
+                        stringResource(if (marked) R.string.action_bookmarked else R.string.action_bookmark),
+                    ) { toggleBookmark(top.url, top.title, marked); close() },
+                ),
             )
         }
     }

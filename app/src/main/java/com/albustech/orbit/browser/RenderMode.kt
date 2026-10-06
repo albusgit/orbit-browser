@@ -27,7 +27,7 @@ enum class BezelMode {
 }
 
 /** The control links.js has focused. */
-data class LinkFocus(val href: String, val label: String, val kind: String)
+data class LinkFocus(val href: String, val label: String, val kind: String, val index: Int = 0, val count: Int = 0)
 
 /** Where the reader is: 0-based page, pages paginated so far, and whether that's all of them. */
 data class ReaderProgress(val page: Int, val total: Int, val done: Boolean)

@@ -21,8 +21,14 @@ import org.json.JSONObject
  *
  * Messages are hints from page context, never commands: the controller checks each one
  * against its own state (was extraction requested? is a reader page showing?).
+ *
+ * The one exception to "main frame only" is `cosmetic` (element hiding): any frame may ask, and
+ * gets its answer back through [onFrameRequest]'s reply, which goes to that frame alone.
  */
-class Bridge(private val onMessage: (type: String, msg: JSONObject) -> Unit) {
+class Bridge(
+    private val onMessage: (type: String, msg: JSONObject) -> Unit,
+    private val onFrameRequest: (type: String, msg: JSONObject, origin: Uri, reply: (String) -> Unit) -> Unit = { _, _, _, _ -> },
+) {
 
     private val main = Handler(Looper.getMainLooper())
 
@@ -41,7 +47,15 @@ class Bridge(private val onMessage: (type: String, msg: JSONObject) -> Unit) {
                         isMainFrame: Boolean,
                         replyProxy: JavaScriptReplyProxy,
                     ) {
-                        if (isMainFrame) dispatch(message.data)
+                        val (type, msg) = parse(message.data) ?: return
+                        if (type in FRAME_REQUESTS) {
+                            // Lint can't see the WEB_MESSAGE_LISTENER check around this listener.
+                            @SuppressLint("RequiresFeature")
+                            val reply = { css: String -> replyProxy.postMessage(css) }
+                            onFrameRequest(type, msg, sourceOrigin, reply)
+                        } else if (isMainFrame) {
+                            deliver(type, msg)
+                        }
                     }
                 },
             )
@@ -50,26 +64,36 @@ class Bridge(private val onMessage: (type: String, msg: JSONObject) -> Unit) {
         }
     }
 
-    private fun dispatch(raw: String?) {
-        if (raw == null || raw.length > MAX_MESSAGE) return
+    private fun parse(raw: String?): Pair<String, JSONObject>? {
+        if (raw == null || raw.length > MAX_MESSAGE) return null
         val msg = try {
             JSONObject(raw)
         } catch (_: JSONException) {
-            return
+            return null
         }
         val type = msg.optString("type")
-        if (type.isEmpty()) return
+        return if (type.isEmpty()) null else type to msg
+    }
+
+    private fun deliver(type: String, msg: JSONObject) {
         if (Looper.myLooper() == Looper.getMainLooper()) onMessage(type, msg) else main.post { onMessage(type, msg) }
     }
 
     private inner class NativeBridge {
         @JavascriptInterface
-        fun post(raw: String?) = dispatch(raw)
+        fun post(raw: String?) {
+            // No reply channel here, so frame requests (element hiding) simply go unanswered.
+            val (type, msg) = parse(raw) ?: return
+            if (type !in FRAME_REQUESTS) deliver(type, msg)
+        }
     }
 
     private companion object {
         /** Articles can be large; anything beyond this is not something we asked for. */
         const val MAX_MESSAGE = 4 * 1024 * 1024
+
+        /** Message types any frame may send; each gets a reply instead of a main-thread callback. */
+        val FRAME_REQUESTS = setOf("cosmetic")
     }
 }
 

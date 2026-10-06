@@ -20,6 +20,8 @@ class MemoryLog(context: Context, private val scope: CoroutineScope) {
     private var loads = 0
 
     fun onPageLoaded(url: String?) {
+        // Diagnostics only: release builds skip the smaps walk entirely.
+        if (!com.albustech.orbit.BuildConfig.DEBUG) return
         val n = ++loads
         // Debug.getMemoryInfo walks smaps and can take tens of ms: keep it off the main thread.
         scope.launch(Dispatchers.Default) {

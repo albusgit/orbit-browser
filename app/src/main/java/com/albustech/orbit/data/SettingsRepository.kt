@@ -1,16 +1,11 @@
 package com.albustech.orbit.data
 
 import android.content.Context
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.floatPreferencesKey
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
+import android.content.SharedPreferences
 import com.albustech.orbit.browser.BrowserController
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /** Reader typography. Sizes are CSS px (= dp on the watch). */
 data class ReaderStyle(
@@ -34,6 +29,8 @@ data class Settings(
     val reader: ReaderStyle = ReaderStyle(),
     val keepScreenOn: Boolean = false,
     val blockTrackers: Boolean = true,
+    /** The launcher's "Turn bezel to pick" hint shows until the bezel is first used there. */
+    val bezelHintSeen: Boolean = false,
 ) {
     companion object {
         const val DEFAULT_TEXT_ZOOM = 100
@@ -55,59 +52,74 @@ enum class SearchEngine(val label: String, val template: String) {
     }
 }
 
-private val Context.settingsStore by preferencesDataStore(name = "settings")
-
-/** App-wide settings. Per-site settings, bookmarks, history and positions live in Room. */
+/**
+ * App-wide settings on plain SharedPreferences: a handful of values doesn't need DataStore (and
+ * its extra libraries and native code). Exposed as a StateFlow that updates on every change.
+ * Per-site settings, bookmarks, history and positions live in Room.
+ */
 class SettingsRepository(context: Context) {
 
-    private val store = context.applicationContext.settingsStore
+    private val prefs: SharedPreferences = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    private val state = MutableStateFlow(read())
 
-    val settings: Flow<Settings> = store.data.map { p ->
-        Settings(
-            searchTemplate = p[SEARCH_TEMPLATE] ?: BrowserController.DEFAULT_SEARCH_TEMPLATE,
-            textZoom = p[TEXT_ZOOM] ?: Settings.DEFAULT_TEXT_ZOOM,
-            lastUrl = p[LAST_URL],
-            reader = ReaderStyle(
-                fontSize = p[READER_FONT_SIZE] ?: ReaderStyle.DEFAULT_FONT_SIZE,
-                lineHeight = p[READER_LINE_HEIGHT] ?: ReaderStyle.DEFAULT_LINE_HEIGHT,
-                serif = p[READER_SERIF] ?: true,
-            ),
-            keepScreenOn = p[KEEP_SCREEN_ON] ?: false,
-            blockTrackers = p[BLOCK_TRACKERS] ?: true,
-        )
+    // Held in a field: SharedPreferences keeps listeners weakly.
+    private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> state.value = read() }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(listener)
     }
 
-    suspend fun setSearchTemplate(template: String) = set(SEARCH_TEMPLATE, template)
+    val settings: StateFlow<Settings> = state.asStateFlow()
 
-    suspend fun setTextZoom(percent: Int) =
-        set(TEXT_ZOOM, percent.coerceIn(Settings.MIN_TEXT_ZOOM, Settings.MAX_TEXT_ZOOM))
+    fun setSearchTemplate(template: String) = edit { putString(SEARCH_TEMPLATE, template) }
 
-    suspend fun setLastUrl(url: String) = set(LAST_URL, url)
+    fun setTextZoom(percent: Int) =
+        edit { putInt(TEXT_ZOOM, percent.coerceIn(Settings.MIN_TEXT_ZOOM, Settings.MAX_TEXT_ZOOM)) }
 
-    suspend fun setReaderStyle(style: ReaderStyle) {
-        store.edit {
-            it[READER_FONT_SIZE] = style.fontSize.coerceIn(ReaderStyle.MIN_FONT_SIZE, ReaderStyle.MAX_FONT_SIZE)
-            it[READER_LINE_HEIGHT] = style.lineHeight
-            it[READER_SERIF] = style.serif
-        }
+    fun setLastUrl(url: String) = edit { putString(LAST_URL, url) }
+
+    fun setReaderStyle(style: ReaderStyle) = edit {
+        putInt(READER_FONT_SIZE, style.fontSize.coerceIn(ReaderStyle.MIN_FONT_SIZE, ReaderStyle.MAX_FONT_SIZE))
+        putFloat(READER_LINE_HEIGHT, style.lineHeight)
+        putBoolean(READER_SERIF, style.serif)
     }
 
-    suspend fun setKeepScreenOn(on: Boolean) = set(KEEP_SCREEN_ON, on)
+    fun setKeepScreenOn(on: Boolean) = edit { putBoolean(KEEP_SCREEN_ON, on) }
 
-    suspend fun setBlockTrackers(on: Boolean) = set(BLOCK_TRACKERS, on)
+    fun setBlockTrackers(on: Boolean) = edit { putBoolean(BLOCK_TRACKERS, on) }
 
-    private suspend fun <T> set(key: Preferences.Key<T>, value: T) {
-        store.edit { it[key] = value }
+    fun setBezelHintSeen() {
+        if (!state.value.bezelHintSeen) edit { putBoolean(BEZEL_HINT_SEEN, true) }
     }
+
+    private inline fun edit(block: SharedPreferences.Editor.() -> Unit) {
+        prefs.edit().apply(block).apply()
+    }
+
+    private fun read() = Settings(
+        searchTemplate = prefs.getString(SEARCH_TEMPLATE, null) ?: BrowserController.DEFAULT_SEARCH_TEMPLATE,
+        textZoom = prefs.getInt(TEXT_ZOOM, Settings.DEFAULT_TEXT_ZOOM),
+        lastUrl = prefs.getString(LAST_URL, null),
+        reader = ReaderStyle(
+            fontSize = prefs.getInt(READER_FONT_SIZE, ReaderStyle.DEFAULT_FONT_SIZE),
+            lineHeight = prefs.getFloat(READER_LINE_HEIGHT, ReaderStyle.DEFAULT_LINE_HEIGHT),
+            serif = prefs.getBoolean(READER_SERIF, true),
+        ),
+        keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, false),
+        blockTrackers = prefs.getBoolean(BLOCK_TRACKERS, true),
+        bezelHintSeen = prefs.getBoolean(BEZEL_HINT_SEEN, false),
+    )
 
     private companion object {
-        val SEARCH_TEMPLATE = stringPreferencesKey("search_template")
-        val TEXT_ZOOM = intPreferencesKey("text_zoom")
-        val LAST_URL = stringPreferencesKey("last_url")
-        val READER_FONT_SIZE = intPreferencesKey("reader_font_size")
-        val READER_LINE_HEIGHT = floatPreferencesKey("reader_line_height")
-        val READER_SERIF = booleanPreferencesKey("reader_serif")
-        val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
-        val BLOCK_TRACKERS = booleanPreferencesKey("block_trackers")
+        const val FILE = "settings"
+        const val SEARCH_TEMPLATE = "search_template"
+        const val TEXT_ZOOM = "text_zoom"
+        const val LAST_URL = "last_url"
+        const val READER_FONT_SIZE = "reader_font_size"
+        const val READER_LINE_HEIGHT = "reader_line_height"
+        const val READER_SERIF = "reader_serif"
+        const val KEEP_SCREEN_ON = "keep_screen_on"
+        const val BLOCK_TRACKERS = "block_trackers"
+        const val BEZEL_HINT_SEEN = "bezel_hint_seen"
     }
 }

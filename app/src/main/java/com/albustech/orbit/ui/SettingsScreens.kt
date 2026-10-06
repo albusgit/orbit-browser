@@ -62,7 +62,7 @@ fun SettingsScreen(
                 onSearch(engines[(current.ordinal + 1) % engines.size].template)
             }, secondary = current.label)
         }
-        item { MenuSwitch(stringResource(R.string.settings_block), settings.blockTrackers, onBlock) }
+        item { MenuSwitch(stringResource(R.string.settings_block), settings.blockTrackers, onBlock, secondary = stringResource(R.string.settings_block_lists)) }
         item { MenuSwitch(stringResource(R.string.settings_keep_on), settings.keepScreenOn, onKeepOn) }
         item { MenuSwitch(stringResource(R.string.settings_serif), settings.reader.serif, onSerif) }
         item { MenuButton(R.drawable.ic_delete, stringResource(R.string.action_clear_history), onClearHistory) }
@@ -89,6 +89,14 @@ fun SiteSettingsScreen(
                 site.liteUserAgent,
                 { v -> onUpdate { it.copy(liteUserAgent = v) } },
                 secondary = stringResource(R.string.site_lite_hint),
+            )
+        }
+        item {
+            MenuSwitch(
+                stringResource(R.string.site_rich_graphics),
+                site.richGraphics,
+                { v -> onUpdate { it.copy(richGraphics = v) } },
+                secondary = stringResource(R.string.site_rich_graphics_hint),
             )
         }
     }

@@ -7,9 +7,10 @@ Other Wear OS browsers show a rectangular phone page through a round hole. Orbit
 circle as the layout surface. Text stays inside the circle, the chrome follows the curved
 edge, and the bezel is the main control.
 
-**Status: all four phases are built.** The app builds (debug and minified release), and unit
-tests, lint and the three headless rendering checks pass. It has **not yet been run on an
-emulator or a watch**: the build container has no KVM. See [Testing on a device](#testing-on-a-device).
+**Status: all four phases are built, plus the round-native redesign.** The app builds (debug
+and minified release). Unit tests, lint, the Robolectric screenshot renders and the headless
+Chromium checks all pass. It has **not yet been run on an emulator or a watch**, because the
+build container has no KVM. See [Testing on a device](#testing-on-a-device).
 
 ---
 
@@ -23,34 +24,71 @@ emulator or a watch**: the build container has no KVM. See [Testing on a device]
 | **Round Scroll** | Pages that aren't articles, or *Scroll* | The content column is capped to the inscribed square (d/√2) and padded top and bottom by the circle-to-square gap. The viewport is forced to `device-width`. Fixed headers and cookie bars go back into the flow. Only tables too wide for the column get a horizontal scroll box. Code wraps. A radial vignette fades the rim on purpose. A scroll arc sits on the right edge. |
 | **Zoom view** | Complex layouts, or *Zoom* | The page's own layout in overview, with pinch zoom. Double-tap zooms the tapped block to fit the **inscribed square**, not the full width. The bezel zooms by default. |
 
-Switch with **Menu → View** (Auto → Reader → Round scroll → Zoom). The choice is saved for the site.
+Switch with **More → View** (Auto → Reader → Round scroll → Zoom). The choice is saved for the site.
+
+### Search results as native cards
+
+Orbit recognises results pages from **Google, DuckDuckGo and Bing** (web results only, not
+images or news). It never shows these pages as web pages:
+
+- **While loading**, a curved query and "Searching…" appear at once. The WebView stays hidden, and images on results pages are not fetched (less data over Bluetooth).
+- **`serp.js` reads the organic results** in page order: title, site and snippet, plus Google's featured answer when one is clearly marked. Ads, "People also ask", and links back into the search engine are left out.
+- **Tracking redirects are removed** (Google `/url?q=`, DuckDuckGo `/l/?uddg=`, Bing `/ck/a`), so opening a result goes straight to the site, one hop shorter.
+- **One result per screen.**
+  - The top shows "2 of 10 · query" on a curve, with a letter avatar and the site name. No favicons are fetched.
+  - Below that come the title in the accent colour, the snippet, and a large **Open** button.
+  - Each bezel click snaps to the next card. Dots on the left rim show the position.
+  - The last card loads the next page of results.
+- **Overview**: turn back past the first result, or pinch, to get a list whose rows follow the circle. The query pill at the top is for editing the search, and its mic button starts a new voice search.
+- **Back** from a result returns to the same card.
+- **Fallback**: if a page yields no results (a CAPTCHA, a consent page, a new layout), Orbit shows the real page in Round Scroll. Nothing gets stuck.
+
+DuckDuckGo HTML stays the default engine. Google can't be tested live from the build machine
+(it serves a CAPTCHA there), so its extractor is checked against saved pages. Bing is also
+checked live.
+
+### Round-native controls
+
+- **Launcher** (the home screen):
+  - The mic fills the centre.
+  - Up to six actions orbit it: keyboard, continue reading, three bookmarks (as letter avatars), and More.
+  - The bezel moves a highlight ring around them, and the highlighted name curves along the bottom edge.
+- **Ring menu.** Tap the centre of a page to open it. Eight wedges: Search, Forward, Reload, Bookmark, Tabs, History, More, Back.
+  - The bezel moves the highlight and a centre tap confirms; you can also tap a wedge directly.
+  - Unavailable items are dimmed, never removed, so positions stay put.
+  - **More** is a second ring: View, Text size, This site, Open on phone, Bookmarks, Settings, Home, Close. Its centre shows the connection and the blocked count.
+- **Link wedges.** Long-press a link (or use *Hold for options* in link mode): Open at the top, Phone on the right, Copy at the bottom, Bookmark on the left.
+- **Lists** (bookmarks, history, tabs, settings) use rows that follow the circle's chord.
 
 ### The bezel
 
-Long-press the **centre** of the screen to switch what the bezel does. A curved label shows the new mode:
+What the bezel does is shown as **three tappable segments along the bottom edge** whenever the
+chrome is up: *Pages · Links · Text* in Reader, *Scroll · Links · Zoom* elsewhere. Tap one, or
+long-press the centre to cycle.
 
 1. **Scroll**: smooth steps with momentum (a fast spin flings) in Round Scroll; **page turns** in Reader.
-2. **Links**: steps through the visible links and controls in reading order, with a glowing ring around the focused one. **A tap anywhere opens it.** Past the last visible link the page scrolls (or turns) and focus continues. Back leaves link mode.
+2. **Links**: steps through the visible links and controls in reading order, with a glowing ring around the focused one.
+   - "Link 3 of 9" curves along the top, and a pill at the bottom says **Open link · Hold for options**.
+   - Only the pill opens the link. A tap elsewhere just shows the chrome, so nothing opens by accident.
+   - Past the last visible link the page scrolls (or turns) and focus continues. Back leaves link mode.
 3. **Zoom**: zooms the page. In Reader it changes the text size and re-paginates on the same word.
 
 Every bezel click gives a haptic tick. The end of a page or article gives a firmer bump.
 
 ### The rest
 
-- **Curved UI.** Time and the page title curve along the top edge, a loading ring runs around the whole edge, and position arcs show where you are. It's immersive: everything hides while you scroll, and a tap in the centre opens the menu.
-- **Menu** (a list the bezel scrolls):
-  - Address/search, voice, and Back/Reload/Forward
-  - View, Bezel mode, and a Bookmark toggle
-  - Bookmarks, History, Tabs (n/3), Text size
-  - Open on phone, This site, Settings, Home
-  - The current connection (Wi-Fi / LTE / Phone over Bluetooth) and the number of ad/tracker requests blocked on the page
-- **Radial link menu.** Long-press a link (or long-press away from the centre in link mode) to get Open, Open on phone, Bookmark and Copy link, placed around the centre.
+- **Curved UI.**
+  - Time and the page title curve along the top edge, and a loading ring runs around the whole edge.
+  - In Reader, a progress arc runs around the rim. Elsewhere, a short scroll arc sits at the upper right, clear of your thumb.
+  - It's immersive: everything hides while you scroll.
 - **Entering addresses.**
   - Voice is the primary method ("wikipedia dot org" works). The RemoteInput keyboard is the backup and shows recent sites as quick choices.
   - Matches from bookmarks and history are listed under "Go to"/"Search". When nothing matches, the page opens directly.
   - Search defaults to DuckDuckGo HTML. You can switch to DuckDuckGo Lite, Google or Bing.
-- **Home screen.** Voice and keyboard buttons, a "continue reading" card, and quick-launch bookmarks.
-- **Per site:** view mode, block images, JavaScript on/off, and a *Lite version* toggle (an Opera Mini user agent that many sites answer with basic HTML).
+- **Per site (This site):**
+  - view mode, block images, and JavaScript on/off;
+  - a *Lite version* toggle: an Opera Mini user agent that many sites answer with basic HTML;
+  - **Rich graphics**: WebGL, off unless you turn it on here.
 - **Reading positions** are saved for every URL. Reader stores a word anchor that survives re-pagination; scroll pages store a fraction. Both are restored on reopen.
 - **Typography:** size (11–26 px), line height, serif or sans, and hyphenation in the page's language.
 - **Tabs:** up to 3, kept as URL, title, snapshot and position, never as live WebViews.
@@ -64,12 +102,52 @@ Every bezel click gives a haptic tick. The end of a page or article gives a firm
 
 - One WebView only. `onStop` and ambient pause the WebView and all JS timers, and `onTrimMemory` drops the RAM cache.
 - If the system kills the renderer for memory, Orbit rebuilds with a fresh WebView and reopens the page. If the same page kills it again, it lands on the home screen instead.
-- A bundled 70-host ad/tracker list is applied in `shouldInterceptRequest` (on by default).
+- **Ad and tracker blocking with EasyList + EasyPrivacy** (on by default). See [Content blocking](#content-blocking).
+- **Safe Browsing is off**, both in the manifest and in WebView settings, so there are no lookups per navigation. WebView's usage-metrics upload is opted out as well.
+- **WebGL is off by default.** WebView has no switch for it, so a document-start script refuses WebGL contexts and pages fall back to 2D. That keeps the GPU process idle and removes a fingerprinting surface. Turn it on per site with *This site → Rich graphics* (maps, 3D).
 - Media autoplay is off. Reader images load lazily (the page about to be shown is preloaded).
 - Mobile user agent (the WebView default minus the `wv` marker).
 - AMOLED black: algorithmic darkening on every page, and `#000` in Reader.
 - A stall watchdog gives Bluetooth-via-phone connections 45 s (others 25 s) before showing a clear, connection-specific error ("Too slow over Bluetooth: connect the watch to Wi-Fi, or try Reader view").
-- `adb logcat -s OrbitMem` logs PSS, heap and system free memory after every page load.
+- `adb logcat -s OrbitMem` logs PSS, heap and system free memory after every page load (debug builds only; release builds skip it).
+- Settings live in SharedPreferences, not DataStore: one dependency and its native library fewer.
+- `profileinstaller` installs the baseline profiles that ship with Compose, so the UI starts faster.
+- Scrolling and loading progress are read inside the draw phase, so they redraw one canvas without recomposing the screen.
+
+### Content blocking
+
+Orbit uses the same filter lists as uBlock Origin's defaults, **EasyList** (ads) and
+**EasyPrivacy** (trackers), without uBlock's extension machinery. Orbit stays on Android
+WebView; see the note on GeckoView below for why.
+
+- **Compiled ahead of time.** `tools/filters/compile.mjs` turns the raw lists (~137k lines) into two pre-normalised files in `assets/filters/`. The watch never parses filter syntax: it splits lines and builds its indexes in about 0.2 s on a background thread at startup.
+- **Network blocking**, in `shouldInterceptRequest`:
+  - About 89k block-everywhere hosts and 5k third-party-only hosts are kept as a sorted array of 64-bit hashes.
+  - About 13k URL patterns are each filed under their rarest token, the way uBlock does it. A request only tests the patterns filed under tokens in its own URL.
+  - Supported: `||`, `|`, `^` and `*` anchors and wildcards; `$third-party`; resource types (guessed from WebView's `Accept` header and the file extension, since WebView doesn't report them); `$domain=`; `$important`; `@@` exceptions, including page-level `$document`, `$elemhide` and `$generichide`.
+  - In the JVM benchmark, about 10 µs per request.
+- **Element hiding** (`##` rules):
+  - `cosmetic.js` runs at document start in every frame. It reports the ids and classes the page uses, and keeps reporting them as the page changes.
+  - It gets back only the generic rules filed under those ids and classes, plus the site's own rules and about 400 rules that can't be keyed. Pages never receive all 13k generic selectors.
+  - Answers go back to the asking frame only, and as CSS text only.
+- **Memory:** about 2.8 MB for the network index and 1.5 MB for element hiding. A first, object-per-rule version used 12.5 MB.
+- **APK:** the compiled lists add about 1.15 MB compressed.
+- **Dropped on purpose:** regex filters, `$popup` filters (Orbit never opens popups), and blocking `$document` filters (Orbit never blocks a page you opened). Also options WebView can't honour (`$csp`, `$redirect`, `$removeparam`, …), and procedural or scriptlet cosmetic filters (`#?#`, `+js()`, `:has-text`), which would need a script engine in every page.
+- **Updating the lists:**
+  ```sh
+  node tools/filters/compile.mjs                 # fetch the current lists and recompile
+  node --test tools/filters/compile.test.mjs     # compiler tests
+  ```
+  Orbit's own additions go in `tools/filters/extra.txt`.
+
+**Why not GeckoView?** Switching to Firefox's engine would let Orbit run the real uBlock Origin,
+but it would cost far more than it saves on a watch:
+
+- GeckoView adds tens of megabytes per ABI to the APK, where Orbit is 5 MB.
+- It runs its own content processes on top of the system WebView, which stays installed regardless.
+- It isn't tuned for Wear OS.
+
+WebView with compiled lists gets most of uBlock's blocking and stays light.
 
 ---
 
@@ -85,25 +163,32 @@ app/src/main/
     extract.js                          runs Readability, sanitises the article (allow-list), posts it
     reader.html, reader.css, reader.js  reader page template + circular pagination engine
     links.js                            link-focus mode
-    blocklist.txt                       ad/tracker hosts
+    serp.js                             reads Google / DuckDuckGo / Bing results for the card view
+    cosmetic.js                         element hiding (document start, every frame)
+    filters/network.txt, cosmetic.txt   EasyList + EasyPrivacy, compiled by tools/filters
   java/com/albustech/orbit/
     OrbitApp, MainActivity              singletons; lifecycle, ambient, keep-on, phone hand-off
     browser/   BrowserController        the WebView and everything in it; state for Compose
                Injector, Bridge         assets in, JSON messages out (WebMessageListener)
-               TabManager, Blocklist, Connection, PageError, UserAgents, UrlResolver, MemoryLog
+               Serp                     results-page detection, redirect decoding, next page
+               filters/FilterEngine, Cosmetics   network blocking and element hiding
+               TabManager, Domains, Connection, PageError, UserAgents, UrlResolver, MemoryLog
     reader/    ReaderTemplate           builds the reader page (pure Kotlin, unit-tested)
                ArticleSanitizer         app-side jsoup allow-list pass over the article
     input/     BezelInput               rotary + touch gestures → detents, taps, long-presses
                DetentAccumulator, MomentumTracker, WebViewScroller, Haptics
     ui/        BrowserScreen            root: WebView + overlays + curved chrome
-               MainMenu, UrlEntryScreen, ListScreens, SettingsScreens, LinkMenu,
-               HomeScreen, AmbientScreen, EdgeOverlay, Curved, RoundGeometry, Common
-    data/      SettingsRepository (DataStore), BrowserRepository + db/ (Room: bookmarks,
-               history, per-site settings, reading positions, tabs), Suggestions
+               Launcher, Ring (ring menus + link wedges), SerpScreens, PageChrome
+               (bezel-mode arc, link-mode pill), Avatar, UrlEntryScreen, ListScreens,
+               SettingsScreens, AmbientScreen, EdgeOverlay, Curved, RoundGeometry, Common
+    data/      SettingsRepository (SharedPreferences), BrowserRepository + db/ (Room:
+               bookmarks, history, per-site settings, reading positions, tabs), Suggestions
     tile/      OrbitTileService (ProtoLayout Material3)
     complication/ LaunchComplicationService
-app/src/test/   JVM unit tests (geometry, URLs, UA, detents, momentum, blocklist, template, …)
+app/src/test/   JVM unit tests (geometry, ring hit-testing, URLs, results pages, filters,
+                Room migration, template, …) and Robolectric screenshot renders
 tools/round-check/  headless-Chromium checks (see below)
+tools/filters/      EasyList/EasyPrivacy compiler and its tests
 ```
 
 ### How the reader is wired
@@ -138,7 +223,8 @@ tools/round-check/  headless-Chromium checks (see below)
 | androidx.webkit | 1.17.1 (1.18 is still alpha) |
 | wear / wear-input / wear-remote-interactions | 1.4.0 / 1.2.0 / 1.2.0 |
 | Tiles / ProtoLayout Material3 / complications | 1.6.2 / 1.4.2 / 1.3.0 |
-| Room / DataStore / coroutines / jsoup | 2.8.5 / 1.2.1 / 1.11.0 / 1.23.2 |
+| Room / coroutines / jsoup / profileinstaller | 2.8.5 / 1.11.0 / 1.23.2 / 1.4.1 |
+| Robolectric / Roborazzi (tests only) | 4.17 / 1.76.0 |
 
 ### Device assumptions I couldn't confirm
 
@@ -159,6 +245,22 @@ You need JDK 17 or later and an Android SDK with `platforms;android-37.0`.
 ./gradlew assembleRelease        # minified (R8); sign it with your own key
 ```
 
+The release APK is **5.1 MB**: 3.2 MB of dex and 1.15 MB of compiled filter lists. Before the
+redesign it was 4.1 MB, with 3.3 MB of dex and a 70-host list.
+
+### Screenshots without a device
+
+`ScreenshotTest` renders the round-native screens on the JVM with Robolectric's native
+graphics and Roborazzi, at 480 and 432 px, clipped to the circle:
+
+```sh
+./gradlew testDebugUnitTest --tests '*Screenshot4*'   # → app/build/screenshots/<screen>_<size>.png
+```
+
+It covers the launcher, the ring menu, link wedges, a result card, the results overview,
+results loading, the page chrome with the bezel-mode arc, and link mode. The images are for
+review, not pixel comparison.
+
 ### Headless checks (`tools/round-check`)
 
 ```sh
@@ -167,6 +269,8 @@ node check.mjs          # Round Scroll: every word inside the inscribed square, 
 node reader-check.mjs   # Reader: every word inside the circle, images in the square, nothing lost,
                         #   position kept across re-pagination, timing with CPU throttled 6×
 node links-check.mjs    # Link focus: reading order, scroll/page continuation, back, activate
+node serp-check.mjs     # Search results: Google/DDG/Bing fixtures + live Bing (--no-live to skip)
+node cosmetic-check.mjs # Element hiding with the shipped EasyList rules, incl. ads added after load
 ```
 
 They run the same assets the app injects, at 432 and 480 px and three densities, and they
@@ -175,6 +279,11 @@ write screenshots with a circle mask to `./out`. Latest results:
 - 18/18 Round Scroll cases.
 - 12/12 reader cases. With the CPU throttled 6×, the first page shows in about 0.3–0.5 s and a page turn takes one or two frames.
 - 4/4 link-focus cases.
+- Search results:
+  - Google, DuckDuckGo and Bing fixtures come out in order, with ads and "People also ask" excluded and redirects decoded.
+  - The CAPTCHA page yields nothing, so Orbit falls back to showing it.
+  - Live Bing works.
+- 12/12 element-hiding checks.
 
 ---
 
@@ -217,8 +326,10 @@ write screenshots with a circle mask to `./out`. Latest results:
 | Page | Check |
 |---|---|
 | A long Wikipedia article (`en.wikipedia.org/wiki/Orbital_mechanics`) | Reader opens automatically, pages turn per bezel click without lag, "n / N" label, Text size keeps the position, reopening restores the page |
-| A news site full of ads | Blocked count in the menu, Reader skips the clutter, memory stays flat |
-| Hacker News (`news.ycombinator.com`) | Round Scroll with no clipping; link mode steps in reading order; a tap opens the focused link |
+| A Google, DuckDuckGo and Bing search | Result cards appear (not the page); the bezel snaps card to card; Open goes to the site directly; Back returns to the same card. **Google can't be checked live from the build machine**, so check it here first. |
+| A news site full of ads | Blocked count in the More ring, ad slots hidden rather than left blank, Reader skips the clutter, memory stays flat |
+| Hacker News (`news.ycombinator.com`) | Round Scroll with no clipping; link mode steps in reading order; the *Open link* pill opens the focused link |
+| A WebGL map (`maps.google.com` or similar) | Falls back to 2D or a message; turning on *This site → Rich graphics* brings WebGL back |
 | Wide tables or code (`en.wikipedia.org/wiki/Comparison_of_programming_languages`, a GitHub file view) | Tables scroll inside the column; code wraps; Zoom view's double-tap fits a block to the square |
 | A login form (`github.com/login`) | Link mode → tap a field → keyboard; the bezel still works afterwards |
 
@@ -236,6 +347,9 @@ Also check on both sizes:
 - **Pages with JavaScript turned off** (per-site toggle) get neither the round layout nor Reader nor link focus, because all three are injected JS.
 - **No live suggestions while typing.** Wear keyboards are full-screen, so suggestions appear when the keyboard closes. Inside the keyboard, recent sites are offered as quick choices.
 - **Tabs restore only their current page.** A background tab keeps its page and position, not its back history.
+- **Search results depend on the engines' markup.** The extractors anchor on long-stable structure (Google's `#rso` with `h3` titles, DuckDuckGo's `.result`, Bing's `.b_algo`). When that changes, Orbit falls back to showing the page until `serp.js` is updated.
+- **Resource types are guessed.** WebView doesn't say whether a request is a script or an XHR, so a few type-specific filters apply to both.
+- **Older WebViews.** Element hiding and the WebGL guard need WebView's document-start script support (`DOCUMENT_START_SCRIPT`). Without them, network blocking still works.
 
 ### Phase 2+ (documented, not built): companion phone app
 
@@ -249,3 +363,8 @@ the same `applicationId` and signing key so the Data Layer pairs them.
 
 Readability.js © Arc90 Inc / Mozilla, Apache License 2.0 (`assets/licenses/`). The icons are
 Material Symbols paths (Apache 2.0).
+
+`assets/filters/` is compiled from EasyList and EasyPrivacy © The EasyList authors
+(https://easylist.to), which are dual-licensed under GPLv3 and CC BY-SA 3.0. The compiled
+files are derived works under the same terms, and each says so in its header. The app's About
+line credits them too.

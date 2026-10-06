@@ -31,6 +31,14 @@
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
 
+        <!-- No Safe Browsing lookups and no WebView usage metrics uploads. -->
+        <meta-data
+            android:name="android.webkit.WebView.EnableSafeBrowsing"
+            android:value="false" />
+        <meta-data
+            android:name="android.webkit.WebView.MetricsOptOut"
+            android:value="true" />
+
         <!-- configChanges: the single WebView must survive anything the watch can throw at us. -->
         <activity
             android:name=".MainActivity"

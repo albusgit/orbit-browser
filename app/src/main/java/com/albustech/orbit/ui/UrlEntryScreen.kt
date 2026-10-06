@@ -52,7 +52,7 @@ fun UrlEntryScreen(
         matches = suggest(query)
     }
 
-    OrbitList(initialCenterItem = 1) {
+    OrbitList {
         header { stringResource(R.string.entry_title) }
         item { MenuButton(R.drawable.ic_mic, stringResource(R.string.action_voice), entry::speak, primary = true) }
         item { MenuButton(R.drawable.ic_keyboard, stringResource(R.string.action_keyboard), { entry.type(query) }) }

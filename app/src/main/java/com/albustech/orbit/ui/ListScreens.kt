@@ -2,6 +2,7 @@ package com.albustech.orbit.ui
 
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
@@ -18,7 +19,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.wear.compose.foundation.lazy.TransformingLazyColumnItemScope
 import androidx.wear.compose.material3.FilledTonalButton
+import androidx.wear.compose.material3.SurfaceTransformation
+import androidx.wear.compose.material3.lazy.rememberTransformationSpec
+import androidx.wear.compose.material3.lazy.transformedHeight
 import androidx.wear.compose.material3.Text
 import com.albustech.orbit.R
 import com.albustech.orbit.browser.TabManager
@@ -91,7 +96,7 @@ fun TabsScreen(manager: TabManager, onDone: () -> Unit) {
 }
 
 @Composable
-private fun TabRow(manager: TabManager, tab: TabRecord, onDone: () -> Unit) {
+private fun TransformingLazyColumnItemScope.TabRow(manager: TabManager, tab: TabRecord, onDone: () -> Unit) {
     var thumb by remember(tab.snapshotFile) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(tab.snapshotFile) {
         thumb = withContext(Dispatchers.IO) {
@@ -99,13 +104,15 @@ private fun TabRow(manager: TabManager, tab: TabRecord, onDone: () -> Unit) {
         }
     }
     val current = tab.id == manager.currentId
+    val spec = rememberTransformationSpec()
     FilledTonalButton(
+        transformation = SurfaceTransformation(spec),
         onClick = {
             manager.switchTo(tab.id)
             onDone()
         },
         onLongClick = { manager.close(tab.id) },
-        modifier = Modifier,
+        modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
         icon = thumb?.let { img ->
             {
                 Image(
