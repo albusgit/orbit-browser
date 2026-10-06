@@ -78,6 +78,7 @@ dependencies {
     implementation(libs.androidx.wear.protolayout.material3)
     implementation(libs.androidx.wear.complications.data.source.ktx)
     implementation(libs.kotlinx.coroutines.guava)
+    implementation(libs.jsoup)
 
     testImplementation(libs.junit)
 }

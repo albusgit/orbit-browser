@@ -13,7 +13,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -110,13 +113,24 @@ fun TextSizeScreen(
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
 
+    // Step from local values: the saved settings arrive a moment later, and quick bezel
+    // clicks must not collapse into one step.
+    var size by remember { mutableIntStateOf(style.fontSize) }
+    var zoom by remember { mutableIntStateOf(textZoom) }
+
     fun change(delta: Int) {
         if (reader) {
-            val size = (style.fontSize + delta).coerceIn(ReaderStyle.MIN_FONT_SIZE, ReaderStyle.MAX_FONT_SIZE)
-            if (size != style.fontSize) onStyle(style.copy(fontSize = size))
+            val next = (size + delta).coerceIn(ReaderStyle.MIN_FONT_SIZE, ReaderStyle.MAX_FONT_SIZE)
+            if (next != size) {
+                size = next
+                onStyle(style.copy(fontSize = next))
+            }
         } else {
-            val zoom = (textZoom + delta * 10).coerceIn(Settings.MIN_TEXT_ZOOM, Settings.MAX_TEXT_ZOOM)
-            if (zoom != textZoom) onZoom(zoom)
+            val next = (zoom + delta * 10).coerceIn(Settings.MIN_TEXT_ZOOM, Settings.MAX_TEXT_ZOOM)
+            if (next != zoom) {
+                zoom = next
+                onZoom(next)
+            }
         }
     }
 
@@ -143,7 +157,7 @@ fun TextSizeScreen(
         ) {
             Text(
                 "Aa",
-                fontSize = (if (reader) style.fontSize else 15 * textZoom / 100).sp,
+                fontSize = (if (reader) size else 15 * zoom / 100).sp,
                 fontFamily = if (reader && style.serif) FontFamily.Serif else FontFamily.SansSerif,
             )
             Spacer(Modifier.height(4.dp))
@@ -152,7 +166,7 @@ fun TextSizeScreen(
                     Icon(painterResource(R.drawable.ic_remove), contentDescription = "Smaller")
                 }
                 Text(
-                    if (reader) stringResource(R.string.text_size_value, style.fontSize) else stringResource(R.string.text_zoom_value, textZoom),
+                    if (reader) stringResource(R.string.text_size_value, size) else stringResource(R.string.text_zoom_value, zoom),
                     style = MaterialTheme.typography.titleMedium,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.width(56.dp),
@@ -166,7 +180,7 @@ fun TextSizeScreen(
                 FilledTonalButton(onClick = {
                     val all = ReaderStyle.LINE_HEIGHTS
                     val next = all[(all.indexOfFirst { it >= style.lineHeight - 0.01f }.coerceAtLeast(0) + 1) % all.size]
-                    onStyle(style.copy(lineHeight = next))
+                    onStyle(style.copy(fontSize = size, lineHeight = next))
                 }) {
                     Text(stringResource(R.string.line_height, "%.2f".format(style.lineHeight).trimEnd('0').trimEnd('.')))
                 }

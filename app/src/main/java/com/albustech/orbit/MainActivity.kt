@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.WebView
@@ -144,12 +145,15 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         handleIntent(intent)
     }
 
-    /** VIEW intents from other apps, and the Tile/complication "open this" extra. */
+    /**
+     * VIEW intents from other apps, and the Tile's "open this" extra. The Activity is exported,
+     * so anything here may come from another app: web URLs only (never javascript: and co.).
+     */
     private fun handleIntent(intent: Intent) {
         val url = when {
-            intent.action == Intent.ACTION_VIEW -> intent.data?.takeIf { it.scheme == "http" || it.scheme == "https" }?.toString()
+            intent.action == Intent.ACTION_VIEW -> intent.dataString
             else -> intent.getStringExtra(EXTRA_OPEN_URL)
-        } ?: return
+        }?.takeIf(BrowserController::isWebUrl) ?: return
         controller?.loadUrl(url)
     }
 
@@ -207,7 +211,13 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
      */
     override fun onRendererGone(url: String?) {
         handler.post {
-            val repeat = intent.getBooleanExtra(EXTRA_RECOVERED, false) && intent.dataString == url
+            // Give up reopening pages if the renderer keeps dying (a page that crashes it
+            // after a redirect would otherwise loop).
+            val now = SystemClock.elapsedRealtime()
+            recoveries.removeAll { now - it > RECOVERY_WINDOW_MS }
+            recoveries.add(now)
+            val repeat = recoveries.size > MAX_RECOVERIES
+            controller?.pause() // drop its timers before the WebView goes
             controller = null // keeps onSaveInstanceState away from the dead WebView
             webView?.let {
                 (it.parent as? ViewGroup)?.removeView(it)
@@ -215,7 +225,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
             }
             webView = null
             intent = if (url != null && !repeat) {
-                Intent(Intent.ACTION_VIEW, url.toUri(), this, MainActivity::class.java).putExtra(EXTRA_RECOVERED, true)
+                Intent(Intent.ACTION_VIEW, url.toUri(), this, MainActivity::class.java)
             } else {
                 Intent(this, MainActivity::class.java)
             }
@@ -282,7 +292,10 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
     companion object {
         /** Extra carrying a URL to open (Tile, complication). */
         const val EXTRA_OPEN_URL = "com.albustech.orbit.OPEN_URL"
-        private const val EXTRA_RECOVERED = "com.albustech.orbit.RECOVERED_FROM_RENDERER_LOSS"
+        /** Renderer losses in this process, for the give-up rule. */
+        private val recoveries = ArrayList<Long>()
+        private const val MAX_RECOVERIES = 2
+        private const val RECOVERY_WINDOW_MS = 60_000L
 
         /** How long the screen stays on after the last bezel turn when keep-screen-on is set. */
         private const val KEEP_ON_MS = 2 * 60 * 1000L

@@ -22,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.webkit.WebResourceErrorCompat
 import androidx.webkit.WebViewClientCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.albustech.orbit.data.BrowserRepository
 import com.albustech.orbit.data.ReaderStyle
@@ -32,6 +33,7 @@ import com.albustech.orbit.data.db.SiteSettings
 import com.albustech.orbit.input.WebViewScroller
 import com.albustech.orbit.reader.Anchor
 import com.albustech.orbit.reader.Article
+import com.albustech.orbit.reader.ArticleSanitizer
 import com.albustech.orbit.reader.ReaderTemplate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +78,8 @@ interface BrowserHost {
  * loadDataWithBaseURL(articleUrl#orbit-reader). History becomes [… A, A-reader]; Back from
  * the reader skips A (which would only re-open the reader).
  */
+// A browser runs page JavaScript by design; reader pages are additionally locked down by CSP.
+@SuppressLint("SetJavaScriptEnabled")
 class BrowserController(
     val webView: WebView,
     private val injector: Injector,
@@ -157,7 +161,10 @@ class BrowserController(
     private var pendingExtract: String? = null
     private var expectingReader: String? = null
     private var readerTitle: String? = null
-    private var lastArticle: Article? = null
+    /** False until this reader page says 'ready': earlier 'page' events are its initial layout. */
+    private var readerReady = false
+    /** Bumped per navigation; late blocked-count posts from the previous page are dropped. */
+    @Volatile private var navGeneration = 0
     private var linksActive = false
     private var clearHistoryOnNextLoad = false
     private var positionJob: Job? = null
@@ -182,6 +189,7 @@ class BrowserController(
         applySite(SiteSettings(host = ""))
         scope.launch {
             repo.allSiteSettings().forEach { siteCache[it.host] = it }
+            reapplyCachedSite()
             blocklist = withContext(Dispatchers.IO) {
                 webView.context.assets.open("blocklist.txt").bufferedReader().use { Blocklist.parse(it.readText()) }
             }
@@ -198,6 +206,11 @@ class BrowserController(
     }
 
     fun loadUrl(target: String) {
+        // Only web pages: never javascript:, file:, content: or intent: from anywhere.
+        if (!isWebUrl(target)) {
+            Log.w(TAG, "Refused to load $target")
+            return
+        }
         error = null
         hasPage = true
         url = target
@@ -208,12 +221,15 @@ class BrowserController(
     /** Opens [target] as the start of a fresh history (a tab switch or a new tab). */
     fun loadFresh(target: String?) {
         if (target == null) {
+            // A blank tab: unload the old page (stops its scripts) and start a fresh history
+            // with the next real page. about:blank itself is never treated as a page.
             showHome()
-            webView.loadUrl("about:blank")
+            webView.loadUrl(BLANK)
             clearHistoryOnNextLoad = true
             url = null
             title = null
-            hasPage = false
+            readerUrl = null
+            reader = null
         } else {
             clearHistoryOnNextLoad = true
             loadUrl(target)
@@ -226,18 +242,24 @@ class BrowserController(
             setBezel(BezelMode.SCROLL)
             return true
         }
+        val steps = backSteps() ?: return false
+        webView.goBackOrForward(steps)
+        return true
+    }
+
+    /**
+     * How far Back goes, or null at the start. From a reader page every entry of the same
+     * article right behind it is skipped (its source page, an earlier reader copy, a #fragment
+     * the page pushed): landing on one would only re-open the reader.
+     */
+    private fun backSteps(): Int? {
         val list = webView.copyBackForwardList()
         val i = list.currentIndex
-        if (readerUrl != null && i >= 1 && sameDoc(list.getItemAtIndex(i - 1)?.url, readerUrl)) {
-            if (i < 2) return false
-            webView.goBackOrForward(-2)
-            return true
-        }
-        if (webView.canGoBack()) {
-            webView.goBack()
-            return true
-        }
-        return false
+        val reading = readerUrl ?: return if (webView.canGoBack()) -1 else null
+        var j = i - 1
+        while (j >= 0 && sameDoc(list.getItemAtIndex(j)?.url, reading)) j--
+        while (j >= 0 && list.getItemAtIndex(j)?.url == BLANK) j--
+        return if (j >= 0) j - i else null
     }
 
     fun forward() {
@@ -249,9 +271,15 @@ class BrowserController(
     }
 
     fun reload() {
+        val failed = error
         error = null
-        val article = lastArticle
-        if (readerUrl != null && article != null) showReader(article) else webView.reload()
+        when {
+            // A stopped or failed navigation never committed: reload() would reload the page before it.
+            failed != null && isWebUrl(failed.url) -> loadUrl(failed.url)
+            // Fetch the article afresh; Back still skips every copy of it.
+            readerUrl != null -> loadUrl(readerUrl!!)
+            else -> webView.reload()
+        }
     }
 
     fun showHome() {
@@ -274,7 +302,7 @@ class BrowserController(
     fun setSiteMode(mode: SiteMode) {
         val pageUrl = readerUrl ?: url ?: return
         val key = Suggestions.siteKey(pageUrl) ?: return
-        saveSite(site.copy(host = key, mode = mode))
+        saveSite(savedSite(key).copy(mode = mode))
         val source = readerUrl
         val wantsReader = mode == SiteMode.READER || mode == SiteMode.AUTO
         when {
@@ -303,10 +331,27 @@ class BrowserController(
     fun updateSite(transform: (SiteSettings) -> SiteSettings) {
         val pageUrl = readerUrl ?: url ?: return
         val key = Suggestions.siteKey(pageUrl) ?: return
-        val updated = transform(site.copy(host = key))
+        val updated = transform(savedSite(key))
         saveSite(updated)
         applySite(updated)
-        if (readerUrl == null && hasPage) webView.reload()
+        if (readerUrl != null) webView.settings.javaScriptEnabled = true else if (hasPage) webView.reload()
+    }
+
+    private fun savedSite(key: String) = siteCache[key] ?: SiteSettings(host = key)
+
+    /** Settings load asynchronously at start: re-apply if the page on screen already used defaults. */
+    private fun reapplyCachedSite() {
+        val key = appliedSiteKey ?: return
+        val saved = siteCache[key] ?: return
+        if (saved == site) return
+        appliedSiteKey = null
+        if (readerUrl != null) {
+            applySiteFor(readerUrl)
+            webView.settings.javaScriptEnabled = true
+        } else {
+            applySiteFor(url)
+            if (hasPage) webView.reload()
+        }
     }
 
     private fun saveSite(s: SiteSettings) {
@@ -430,9 +475,12 @@ class BrowserController(
             val saved = repo.position(article.url)
             val anchor = readerAnchors[key(article.url)]
                 ?: saved?.takeIf { it.reader }?.let { Anchor(it.anchorBlock, it.anchorWord) }
-            val html = withContext(Dispatchers.Default) { injector.readerPage(article, readerStyle, anchor) }
+            val html = withContext(Dispatchers.Default) {
+                // extract.js sanitises in the page, but the page could tamper with that:
+                // clean again here, outside its reach.
+                injector.readerPage(article.copy(content = ArticleSanitizer.clean(article.content, article.url)), readerStyle, anchor)
+            }
             if (!sameDoc(url, article.url)) return@launch // the user moved on meanwhile
-            lastArticle = article
             expectingReader = article.url
             readerTitle = article.title
             // The history entry carries the marker too, so Back/Forward onto it is recognised
@@ -477,6 +525,7 @@ class BrowserController(
         val anchor = msg.optJSONObject("anchor")?.let { Anchor(it.optInt("u"), it.optInt("w")) }
         when (event) {
             "ready" -> {
+                readerReady = true
                 val known = readerAnchors[key(article)]
                 if (known != null && known != anchor) {
                     webView.evaluateJavascript("window.orbitReader&&orbitReader.goToAnchor({u:${known.unit},w:${known.word}})", null)
@@ -488,7 +537,9 @@ class BrowserController(
             }
             "edge" -> host.onEdge()
         }
-        if (anchor != null && (event == "page")) {
+        // 'page' events before 'ready' are the initial layout of a page restored from history,
+        // not reading: they must not overwrite the remembered position.
+        if (anchor != null && event == "page" && readerReady) {
             readerAnchors[key(article)] = anchor
             savePositionSoon(
                 ReadingPosition(
@@ -575,13 +626,7 @@ class BrowserController(
     // ----------------------------------------------------------------- helpers
 
     private fun refreshNav() {
-        val list = webView.copyBackForwardList()
-        val i = list.currentIndex
-        canGoBack = if (readerUrl != null && i >= 1 && sameDoc(list.getItemAtIndex(i - 1)?.url, readerUrl)) {
-            i >= 2
-        } else {
-            webView.canGoBack()
-        }
+        canGoBack = backSteps() != null
         canGoForward = webView.canGoForward()
     }
 
@@ -594,13 +639,24 @@ class BrowserController(
 
     private fun sameDoc(a: String?, b: String?): Boolean = a != null && b != null && key(a) == key(b)
 
+    /**
+     * Reader history entries hold whole pages, so the WebView's own state can outgrow the
+     * Binder limit: cap it where supported, and always keep the URL as a fallback.
+     */
     fun saveState(out: Bundle) {
-        webView.saveState(out)
+        (readerUrl ?: url)?.let { out.putString(STATE_URL, it) }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAVE_STATE)) {
+            WebViewCompat.saveState(webView, out, MAX_STATE_BYTES, false)
+        }
     }
 
     fun restoreState(saved: Bundle): Boolean {
-        val list = webView.restoreState(saved) ?: return false
-        if (list.size == 0) return false
+        val list = webView.restoreState(saved)
+        if (list == null || list.size == 0) {
+            val fallback = saved.getString(STATE_URL) ?: return false
+            loadUrl(fallback)
+            return isWebUrl(fallback)
+        }
         hasPage = true
         url = list.currentItem?.url?.removeSuffix(ReaderTemplate.MARKER)
         title = list.currentItem?.title
@@ -630,14 +686,28 @@ class BrowserController(
     private inner class Client : WebViewClientCompat() {
 
         override fun onPageStarted(view: WebView, pageUrl: String?, favicon: Bitmap?) {
-            val reading = expectingReader
-                ?: pageUrl?.takeIf { it.endsWith(ReaderTemplate.MARKER) }?.removeSuffix(ReaderTemplate.MARKER)
+            val expected = expectingReader
             expectingReader = null
+            if (pageUrl == BLANK && expected == null) return // a blank tab, not a page
+            // Reader pages are recognised by the marker on their URL (base and history URL);
+            // a data: URL only counts while we're waiting for our own reader load.
+            val reading = when {
+                pageUrl?.endsWith(ReaderTemplate.MARKER) == true -> pageUrl.removeSuffix(ReaderTemplate.MARKER)
+                expected != null && (pageUrl == null || pageUrl.startsWith("data:")) -> expected
+                else -> null
+            }
             readerUrl = reading
+            readerReady = false
+            navGeneration++
             if (reading == null) {
                 reader = null
                 readerTitle = null
                 applySiteFor(pageUrl)
+            } else {
+                // The article's own site settings, but the reader always needs its script
+                // (page scripts are blocked by its CSP either way).
+                applySiteFor(reading)
+                view.settings.javaScriptEnabled = true
             }
             isLoading = true
             progress = 0
@@ -663,7 +733,8 @@ class BrowserController(
             isLoading = false
             progress = 100
             main.removeCallbacks(watchdog)
-            if (clearHistoryOnNextLoad) {
+            if (pageUrl == BLANK) return
+            if (clearHistoryOnNextLoad && (readerUrl != null || isWebUrl(pageUrl))) {
                 clearHistoryOnNextLoad = false
                 view.clearHistory()
             }
@@ -712,7 +783,8 @@ class BrowserController(
             val list = blocklist ?: return null
             if (!list.isBlocked(request.url.host)) return null
             val n = blockedCounter.incrementAndGet()
-            main.post { blockedCount = n }
+            val gen = navGeneration
+            main.post { if (gen == navGeneration) blockedCount = n }
             return WebResourceResponse("text/plain", "utf-8", 204, "No Content", emptyMap(), ByteArrayInputStream(ByteArray(0)))
         }
 
@@ -766,6 +838,12 @@ class BrowserController(
         private const val SQUARE_FIT = 0.7071f
         private const val DOUBLE_TAP_SETTLE_MS = 450L
         private val FALLBACK = Regex("S\\.browser_fallback_url=([^;]+)")
+        private const val BLANK = "about:blank"
+        private const val STATE_URL = "orbit.url"
+        private const val MAX_STATE_BYTES = 256 * 1024
+
+        fun isWebUrl(u: String?): Boolean =
+            u != null && (u.startsWith("https://", ignoreCase = true) || u.startsWith("http://", ignoreCase = true))
 
         fun hostOf(url: String?): String? = Suggestions.siteKey(url)
     }

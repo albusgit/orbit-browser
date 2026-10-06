@@ -92,6 +92,7 @@ app/src/main/
                Injector, Bridge         assets in, JSON messages out (WebMessageListener)
                TabManager, Blocklist, Connection, PageError, UserAgents, UrlResolver, MemoryLog
     reader/    ReaderTemplate           builds the reader page (pure Kotlin, unit-tested)
+               ArticleSanitizer         app-side jsoup allow-list pass over the article
     input/     BezelInput               rotary + touch gestures → detents, taps, long-presses
                DetentAccumulator, MomentumTracker, WebViewScroller, Haptics
     ui/        BrowserScreen            root: WebView + overlays + curved chrome
@@ -109,9 +110,10 @@ tools/round-check/  headless-Chromium checks (see below)
 
 1. A page loads in Round Scroll.
 2. If the site is *Auto* or *Reader*, `extract.js` runs Readability in the page. It sanitises the article against an allow-list in an inert document and posts it over the `orbitBridge` WebMessageListener (main frame only).
-3. `ReaderTemplate` fills `reader.html` (strict CSP with a per-page nonce, so no page script can run) and loads it with `loadDataWithBaseURL(url#orbit-reader)`.
-4. History becomes `[… A, A-reader]`. Back from the reader skips `A`, which would only reopen the reader.
-5. Messages from the page are treated as hints and checked against the controller's own state. They are never commands.
+3. The app sanitises the article again with a jsoup allow-list (`ArticleSanitizer`), outside the page's reach.
+4. `ReaderTemplate` fills `reader.html` and loads it with `loadDataWithBaseURL(url#orbit-reader)`. Its strict CSP has a per-page nonce plus `base-uri`/`form-action 'none'`, so no page script can run.
+5. History becomes `[… A, A-reader]`. Back from the reader skips every entry of the same article behind it, which would only reopen the reader.
+6. Messages from the page are treated as hints and checked against the controller's own state. They are never commands.
 
 ### Key decisions
 
@@ -136,7 +138,7 @@ tools/round-check/  headless-Chromium checks (see below)
 | androidx.webkit | 1.17.1 (1.18 is still alpha) |
 | wear / wear-input / wear-remote-interactions | 1.4.0 / 1.2.0 / 1.2.0 |
 | Tiles / ProtoLayout Material3 / complications | 1.6.2 / 1.4.2 / 1.3.0 |
-| Room / DataStore / coroutines | 2.8.5 / 1.2.1 / 1.11.0 |
+| Room / DataStore / coroutines / jsoup | 2.8.5 / 1.2.1 / 1.11.0 / 1.23.2 |
 
 ### Device assumptions I couldn't confirm
 
