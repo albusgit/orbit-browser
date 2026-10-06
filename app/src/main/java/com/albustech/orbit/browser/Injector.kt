@@ -6,53 +6,94 @@ import android.webkit.WebView
 import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.albustech.orbit.data.ReaderStyle
+import com.albustech.orbit.reader.Anchor
+import com.albustech.orbit.reader.Article
+import com.albustech.orbit.reader.ReaderTemplate
 import com.albustech.orbit.ui.RoundGeometry
+import java.security.SecureRandom
 
 /**
- * Loads the injected assets once and installs them into the WebView.
+ * Loads the injected assets once and gets them into pages.
  *
- * Preferred path: a document-start script, so the round layout is in place before first paint.
- * Fallback for WebViews without DOCUMENT_START_SCRIPT: [injectLate] from page callbacks.
+ * - round.js/round.css: a document-start script (layout in place before first paint), with
+ *   an evaluateJavascript fallback for WebViews without DOCUMENT_START_SCRIPT.
+ * - Readability + extract.js: evaluated after load, only when Reader might be wanted, so
+ *   ordinary pages don't pay for parsing 90 KB of JS.
+ * - links.js: evaluated when link-focus mode starts.
+ * - reader.html/css/js: assembled by [ReaderTemplate] into the reader page.
  */
 class Injector(context: Context, private val geometry: RoundGeometry) {
 
     private val assets = context.applicationContext.assets
-    private val roundCss: String by lazy { readAsset("round.css") }
-    private val roundJs: String by lazy { readAsset("round.js") }
+    private val roundCss by lazy { readAsset("round.css") }
+    private val roundJs by lazy { readAsset("round.js") }
+    private val extractJs by lazy {
+        listOf("Readability-readerable.js", "Readability.js", "extract.js").joinToString("\n") { readAsset(it) }
+    }
+    private val linksJs by lazy { readAsset("links.js") }
+    private val readerTemplate by lazy { readAsset("reader.html") }
+    private val readerCss by lazy { readAsset("reader.css") }
+    private val readerJs by lazy { readAsset("reader.js") }
+    private val random = SecureRandom()
 
     private var handle: ScriptHandler? = null
-    private var mode: RenderMode = RenderMode.SCROLL
+    private var roundInstalled: Boolean? = null
 
-    private val usesDocumentStart: Boolean =
+    private val documentStart: Boolean =
         WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
 
-    /** (Re)installs the scripts for [newMode]. Takes effect on the next navigation. */
-    fun install(webView: WebView, newMode: RenderMode) {
-        mode = newMode
+    /** Turns the round layout on or off for upcoming navigations. */
+    fun setRoundLayout(webView: WebView, enabled: Boolean) {
+        if (roundInstalled == enabled) return
+        roundInstalled = enabled
         handle?.remove()
         handle = null
-        val script = scriptFor(newMode) ?: return
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            handle = WebViewCompat.addDocumentStartJavaScript(webView, script, setOf("*"))
+        if (enabled && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            handle = WebViewCompat.addDocumentStartJavaScript(webView, roundScript(), setOf("*"))
         }
     }
 
-    /** Fallback when document-start scripts are unsupported. Safe to call repeatedly. */
+    /** Fallback path when document-start scripts are unsupported. Idempotent in the page. */
     fun injectLate(webView: WebView) {
-        if (usesDocumentStart) return
-        val script = scriptFor(mode) ?: return
-        webView.evaluateJavascript(script, null)
+        if (documentStart || roundInstalled != true) return
+        webView.evaluateJavascript(roundScript(), null)
     }
 
-    private fun scriptFor(mode: RenderMode): String? = when (mode) {
-        RenderMode.SCROLL -> buildString {
-            append("window.__orbit={d:").append(JsStrings.number(geometry.diameterCss))
-            append(",sq:").append(JsStrings.number(geometry.squareCss))
-            append(",inset:").append(JsStrings.number(geometry.insetCss)).append("};\n")
-            append("window.__orbitCss=").append(JsStrings.quote(roundCss)).append(";\n")
-            append(roundJs)
-        }
-        RenderMode.DESKTOP -> null
+    /** Runs Readability on the loaded page; the result arrives as an 'article' message. */
+    fun extract(webView: WebView, force: Boolean) {
+        webView.evaluateJavascript("(function(){var orbitForce=$force;\n$extractJs\n})();", null)
+    }
+
+    fun startLinks(webView: WebView) {
+        webView.evaluateJavascript(linksJs, null)
+    }
+
+    fun readerPage(article: Article, style: ReaderStyle, anchor: Anchor?): String =
+        ReaderTemplate.build(
+            template = readerTemplate,
+            css = readerCss,
+            script = readerJs,
+            article = article,
+            diameterCss = geometry.diameterCss,
+            squareCss = geometry.squareCss,
+            insetCss = geometry.insetCss,
+            style = style,
+            anchor = anchor,
+            nonce = nonce(),
+        )
+
+    private fun roundScript(): String = buildString {
+        append("window.__orbit={d:").append(JsStrings.number(geometry.diameterCss))
+        append(",sq:").append(JsStrings.number(geometry.squareCss))
+        append(",inset:").append(JsStrings.number(geometry.insetCss)).append("};\n")
+        append("window.__orbitCss=").append(JsStrings.quote(roundCss)).append(";\n")
+        append(roundJs)
+    }
+
+    private fun nonce(): String {
+        val bytes = ByteArray(16).also(random::nextBytes)
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 
     private fun readAsset(name: String): String =

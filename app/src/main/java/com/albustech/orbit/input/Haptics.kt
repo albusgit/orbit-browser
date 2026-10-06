@@ -23,6 +23,16 @@ class Haptics(private val view: View) {
         view.performHapticFeedback(constant)
     }
 
+    /** End of the page or the article: a firmer "no further" bump. */
+    fun edge() {
+        view.performHapticFeedback(HapticFeedbackConstants.REJECT)
+    }
+
+    /** Mode change or menu open. */
+    fun confirm() {
+        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+    }
+
     private companion object {
         const val MIN_INTERVAL_MS = 25L
     }

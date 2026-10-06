@@ -1,0 +1,167 @@
+/*
+ * Orbit — Paged Reader. True black for AMOLED; every page is a circle.
+ * Geometry and typography arrive as CSS variables set by reader.js.
+ */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  color: #e6e6e6;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: pan-y; /* horizontal swipes turn pages */
+}
+
+body {
+  font-family: var(--orbit-font, Georgia, 'Noto Serif', serif);
+  font-size: var(--orbit-font-size, 15px);
+  line-height: var(--orbit-line-height, 1.4);
+  -webkit-hyphens: auto;
+  hyphens: auto;
+  overflow-wrap: break-word;
+  text-rendering: optimizeLegibility;
+}
+
+#orbit-book {
+  position: relative;
+  width: var(--orbit-d);
+  height: var(--orbit-d);
+  margin: 0 auto;
+}
+
+/* ---- pages ---- */
+
+.orbit-page {
+  position: absolute;
+  inset: 0;
+  display: none;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #000;
+  transform-origin: 50% 160%;
+}
+
+.orbit-page.is-current,
+.orbit-page.is-leaving,
+.orbit-page.is-measuring { display: block; }
+
+.orbit-page.is-measuring { visibility: hidden; }
+
+/* During a turn the new page is on top and the old one can't be tapped. */
+.orbit-page.is-current { z-index: 1; }
+.orbit-page.is-leaving { z-index: 0; pointer-events: none; }
+
+.orbit-flow {
+  position: relative;
+  width: var(--orbit-d);
+  height: var(--orbit-d);
+  overflow: hidden;
+}
+
+.orbit-shape-l { float: left; width: 50%; height: 100%; }
+.orbit-shape-r { float: right; width: 50%; height: 100%; }
+
+/* A page that turns: the dial swings around a point below the screen. */
+@keyframes orbit-in-next   { from { transform: rotate(18deg);  opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes orbit-in-prev   { from { transform: rotate(-18deg); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes orbit-out-next  { from { transform: none; opacity: 1; } to { transform: rotate(-18deg); opacity: 0; } }
+@keyframes orbit-out-prev  { from { transform: none; opacity: 1; } to { transform: rotate(18deg);  opacity: 0; } }
+.orbit-page.in-next  { animation: orbit-in-next 170ms ease-out both; }
+.orbit-page.in-prev  { animation: orbit-in-prev 170ms ease-out both; }
+.orbit-page.out-next { animation: orbit-out-next 170ms ease-in both; }
+.orbit-page.out-prev { animation: orbit-out-prev 170ms ease-in both; }
+
+/* ---- text ---- */
+
+.orbit-flow p, .orbit-flow li, .orbit-flow dd, .orbit-flow dt { margin: 0 0 0.55em; }
+.orbit-flow .orbit-cont { text-indent: 0; }
+.orbit-flow h1, .orbit-flow h2, .orbit-flow h3, .orbit-flow h4, .orbit-flow h5, .orbit-flow h6 {
+  margin: 0.3em 0 0.35em;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #fff;
+  -webkit-hyphens: manual;
+  hyphens: manual;
+}
+.orbit-flow h1 { font-size: 1.35em; }
+.orbit-flow h2 { font-size: 1.2em; }
+.orbit-flow h3 { font-size: 1.1em; }
+.orbit-flow h4, .orbit-flow h5, .orbit-flow h6 { font-size: 1em; }
+.orbit-flow ul, .orbit-flow ol { margin: 0 0 0.55em; padding: 0; list-style-position: inside; }
+.orbit-flow li.orbit-cont { list-style: none; }
+.orbit-flow blockquote { margin: 0 0 0.55em; font-style: italic; color: #c8c8c8; }
+.orbit-flow a { color: #8ab4f8; text-decoration: none; }
+.orbit-flow code, .orbit-flow kbd, .orbit-flow samp { font-family: 'Roboto Mono', monospace; font-size: 0.88em; }
+.orbit-flow sup, .orbit-flow sub { line-height: 0; }
+.orbit-flow .orbit-sep { text-align: center; color: #888; }
+.orbit-flow img { display: none; } /* images get their own pages */
+
+.orbit-title-block { margin-bottom: 0.4em; }
+.orbit-flow .orbit-title { font-size: 1.3em; text-align: center; }
+.orbit-flow .orbit-meta { font-size: 0.8em; color: #9a9a9a; text-align: center; font-family: system-ui, 'Roboto', sans-serif; }
+
+/* ---- image and box pages: content lives in the inscribed square ---- */
+
+.orbit-square {
+  position: absolute;
+  left: var(--orbit-inset);
+  top: var(--orbit-inset);
+  width: var(--orbit-sq);
+  height: var(--orbit-sq);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.orbit-square img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  flex: 0 1 auto;
+  background: #111;
+}
+
+.orbit-square figcaption, .orbit-square .orbit-caption {
+  flex: 0 0 auto;
+  margin-top: 0.3em;
+  font-size: 0.72em;
+  line-height: 1.25;
+  color: #aaa;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* Tables and code: scroll inside the square (touch), the bezel keeps turning pages. */
+.orbit-square.orbit-box {
+  display: block;
+  overflow: auto;
+  touch-action: pan-x pan-y;
+  font-size: 0.8em;
+}
+.orbit-box pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'Roboto Mono', monospace; }
+.orbit-box table { border-collapse: collapse; }
+.orbit-box td, .orbit-box th { border: 1px solid #333; padding: 2px 6px; vertical-align: top; }
+
+/* ---- link focus ring (links.js) ---- */
+.orbit-focus-ring {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 6px;
+  box-shadow: 0 0 0 2px #8ab4f8, 0 0 10px 2px rgba(138, 180, 248, 0.6);
+  z-index: 2147483647;
+  transition: all 90ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-page { animation: none !important; }
+}

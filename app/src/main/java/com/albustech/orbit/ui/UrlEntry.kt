@@ -22,18 +22,23 @@ import com.albustech.orbit.R
 /** Voice first, keyboard (RemoteInput) as the backup. Both deliver plain text to the caller. */
 class UrlEntry internal constructor(
     private val speakAction: () -> Unit,
-    private val typeAction: () -> Unit,
+    private val typeAction: (initial: String?) -> Unit,
 ) {
     fun speak() = speakAction()
-    fun type() = typeAction()
+    fun type(initial: String? = null) = typeAction(initial)
 }
 
 private const val REMOTE_INPUT_KEY = "orbit_url"
 
+/**
+ * @param choices quick picks shown inside the system keyboard screen (recent sites), so a
+ *   familiar site is one tap even before typing.
+ */
 @Composable
-fun rememberUrlEntry(onText: (String) -> Unit): UrlEntry {
+fun rememberUrlEntry(choices: List<String> = emptyList(), onText: (String) -> Unit): UrlEntry {
     val context = LocalContext.current
     val currentOnText by rememberUpdatedState(onText)
+    val currentChoices by rememberUpdatedState(choices)
 
     val keyboard = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val data = result.data ?: return@rememberLauncherForActivityResult
@@ -49,14 +54,14 @@ fun rememberUrlEntry(onText: (String) -> Unit): UrlEntry {
     }
 
     return remember(context) {
-        val typeAction = { keyboard.launch(keyboardIntent(context)) }
+        val typeAction = { _: String? -> keyboard.launch(keyboardIntent(context, currentChoices)) }
         UrlEntry(
             speakAction = {
                 try {
                     voice.launch(voiceIntent(context))
                 } catch (_: ActivityNotFoundException) {
                     Toast.makeText(context, R.string.no_speech, Toast.LENGTH_SHORT).show()
-                    typeAction()
+                    typeAction(null)
                 }
             },
             typeAction = typeAction,
@@ -70,9 +75,11 @@ private fun voiceIntent(context: Context) =
         .putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.voice_prompt))
         .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
 
-private fun keyboardIntent(context: Context): Intent {
+private fun keyboardIntent(context: Context, choices: List<String>): Intent {
     val input = RemoteInput.Builder(REMOTE_INPUT_KEY)
         .setLabel(context.getString(R.string.keyboard_label))
+        .setChoices(choices.take(5).toTypedArray<CharSequence>())
+        .setAllowFreeFormInput(true)
         .wearableExtender {
             setEmojisAllowed(false)
             setInputActionType(EditorInfo.IME_ACTION_GO)

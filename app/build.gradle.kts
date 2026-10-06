@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -39,6 +40,11 @@ android {
     }
 }
 
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.generateKotlin", "true")
+}
+
 kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
@@ -60,6 +66,18 @@ dependencies {
     implementation(libs.androidx.webkit)
     implementation(libs.androidx.wear.input)
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
+    implementation(libs.androidx.wear)
+    implementation(libs.androidx.wear.remote.interactions)
+    implementation(libs.androidx.wear.tiles)
+    implementation(libs.androidx.wear.protolayout)
+    implementation(libs.androidx.wear.protolayout.expression)
+    implementation(libs.androidx.wear.protolayout.material3)
+    implementation(libs.androidx.wear.complications.data.source.ktx)
+    implementation(libs.kotlinx.coroutines.guava)
 
     testImplementation(libs.junit)
 }

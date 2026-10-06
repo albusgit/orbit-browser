@@ -59,6 +59,6 @@ object OrbitWebView {
 
     /** Applies the per-mode layout settings. The caller reloads afterwards. */
     fun applyMode(webView: WebView, mode: RenderMode) {
-        webView.settings.loadWithOverviewMode = mode == RenderMode.DESKTOP
+        webView.settings.loadWithOverviewMode = mode == RenderMode.ZOOM
     }
 }

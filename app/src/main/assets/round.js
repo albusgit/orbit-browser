@@ -8,7 +8,8 @@
  */
 (function () {
   'use strict';
-  if (window.top !== window || window.__orbitRound) return;
+  // Skip frames, repeats, and Orbit's own reader pages (loaded with this fragment).
+  if (window.top !== window || window.__orbitRound || location.hash === '#orbit-reader') return;
   window.__orbitRound = true;
 
   var VIEWPORT = 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=5, user-scalable=yes';
