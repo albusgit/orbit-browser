@@ -1,5 +1,6 @@
 package com.albustech.orbit
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentCallbacks2
@@ -8,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings as SystemSettings
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.WebView
@@ -17,7 +19,6 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -32,13 +33,14 @@ import com.albustech.orbit.browser.Injector
 import com.albustech.orbit.browser.MemoryLog
 import com.albustech.orbit.browser.OrbitWebView
 import com.albustech.orbit.browser.TabManager
+import com.albustech.orbit.browser.WebViewStart
 import com.albustech.orbit.data.ReaderStyle
 import com.albustech.orbit.data.Settings
 import com.albustech.orbit.input.BezelInput
 import com.albustech.orbit.tile.OrbitTileService
 import com.albustech.orbit.ui.AppActions
 import com.albustech.orbit.ui.BrowserScreen
-import com.albustech.orbit.ui.ErrorScreen
+import com.albustech.orbit.ui.WebViewProblemScreen
 import com.albustech.orbit.ui.OrbitDeps
 import com.albustech.orbit.ui.RoundGeometry
 import kotlinx.coroutines.launch
@@ -90,16 +92,23 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         val geometry = currentGeometry()
         lifecycle.addObserver(ambientObserver)
 
-        val view = OrbitWebView.create(this)
-        webView = view
-        if (view == null) {
-            setContent {
-                MaterialTheme {
-                    ErrorScreen(geometry, stringResource(R.string.error_no_webview), detail = null, onRetry = null)
+        val view = when (val start = OrbitWebView.create(this)) {
+            is WebViewStart.Ready -> start.webView
+            is WebViewStart.Failed -> {
+                setContent {
+                    MaterialTheme {
+                        WebViewProblemScreen(
+                            start.problem,
+                            onOpenSettings = ::openAppSettings,
+                            onOpenStore = ::openInStore,
+                            onRetry = ::recreate,
+                        )
+                    }
                 }
+                return
             }
-            return
         }
+        webView = view
 
         val connection = ConnectionMonitor(this)
         val browser = BrowserController(
@@ -189,6 +198,27 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         super.onSaveInstanceState(outState)
         controller?.saveState(outState)
     }
+
+    /** The system's app page for [pkg], where a disabled WebView can be turned back on. */
+    private fun openAppSettings(pkg: String) {
+        launch(Intent(SystemSettings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$pkg".toUri()))
+    }
+
+    /** The watch's Play Store page for [pkg]; the web listing if the store isn't there. */
+    private fun openInStore(pkg: String) {
+        if (!launch(Intent(Intent.ACTION_VIEW, "market://details?id=$pkg".toUri()), quiet = true)) {
+            launch(Intent(Intent.ACTION_VIEW, "https://play.google.com/store/apps/details?id=$pkg".toUri()))
+        }
+    }
+
+    private fun launch(intent: Intent, quiet: Boolean = false): Boolean =
+        try {
+            startActivity(intent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            if (!quiet) Toast.makeText(this, R.string.error_no_handler, Toast.LENGTH_SHORT).show()
+            false
+        }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)

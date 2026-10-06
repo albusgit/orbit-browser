@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <queries>
+        <!-- WebView providers, to tell "disabled" from "not installed" when WebView won't start. -->
+        <package android:name="com.google.android.webview" />
+        <package android:name="com.android.webview" />
+        <package android:name="com.android.chrome" />
         <intent>
             <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
         </intent>

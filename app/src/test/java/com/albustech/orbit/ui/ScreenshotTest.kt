@@ -157,6 +157,22 @@ abstract class ScreenshotTest(private val tag: String) {
         }
     }
 
+    @Test
+    fun webViewProblem() = shot("webview_problem") { g ->
+        WebViewProblemScreen(
+            com.albustech.orbit.browser.WebViewProblem.Crashed(
+                "com.google.android.webview", "119.0.6045.66",
+                "MissingWebViewPackageException: Failed to load WebView provider: No WebView installed",
+            ),
+            onOpenSettings = {}, onOpenStore = {}, onRetry = {},
+        )
+    }
+
+    @Test
+    fun webViewDisabled() = shot("webview_disabled") { g ->
+        WebViewProblemScreen(com.albustech.orbit.browser.WebViewProblem.Disabled("com.google.android.webview"), {}, {}, {})
+    }
+
     @Composable
     private fun FakePage(g: RoundGeometry) {
         Text(

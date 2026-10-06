@@ -230,7 +230,7 @@ tools/filters/      EasyList/EasyPrivacy compiler and its tests
 
 1. **Density.** I couldn't confirm the Watch6 Classic's density (probably about 2.0). Orbit reads it at runtime; the checks cover 1.75, 2.0 and 2.25.
 2. **Bezel events.** I expect one `ACTION_SCROLL` per click. Debug builds log every delta (`adb logcat -s OrbitBezel`) so the detent threshold (`DetentAccumulator`) can be calibrated.
-3. **WebView.** I'm assuming a WebView provider is present and updated on current firmware. If one isn't, Orbit shows an error screen. Every webkit feature is gated by `WebViewFeature`.
+3. **WebView.** I'm assuming a WebView provider is present and up to date on current firmware. If WebView won't start, Orbit says why: the provider is turned off, not installed, or failed to start, with its package, version and error. It also offers the fix (*Turn on* opens the app's system page; *Get* or *Update WebView* opens the watch's Play Store) and a Retry button. A setting that this WebView build rejects is skipped rather than treated as a missing WebView. Every webkit feature is gated by `WebViewFeature`.
 4. **Back button.** I'm assuming the lower hardware key arrives as a normal back event.
 5. **Bluetooth.** I'm assuming the Bluetooth-proxied network reports `TRANSPORT_BLUETOOTH`.
 
