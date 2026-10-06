@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wide tables and code fixture</title>
+<style>
+  body { font: 15px/1.4 system-ui, sans-serif; margin: 0; padding: 12px; }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid #999; padding: 4px 10px; white-space: nowrap; }
+  pre { background: #f6f8fa; padding: 8px; }
+</style>
+</head>
+<body>
+<h1>Benchmarks</h1>
+<p>A table far wider than the screen. It should scroll inside its own box rather than widen the page.</p>
+<table>
+  <tr><th>Model</th><th>Cores</th><th>Clock</th><th>RAM</th><th>Storage</th><th>Display</th><th>Battery</th><th>Weight</th><th>Price</th><th>Year</th></tr>
+  <tr><td>Watch A</td><td>2</td><td>1.4 GHz</td><td>2 GB</td><td>16 GB</td><td>1.5 in</td><td>425 mAh</td><td>59 g</td><td>$399</td><td>2023</td></tr>
+  <tr><td>Watch B</td><td>4</td><td>1.6 GHz</td><td>1.5 GB</td><td>32 GB</td><td>1.4 in</td><td>300 mAh</td><td>45 g</td><td>$299</td><td>2024</td></tr>
+</table>
+<p>A code block with long lines:</p>
+<pre><code>fun main() { val geometry = RoundGeometry(widthPx = 480, heightPx = 480, density = 2f); println("square=${geometry.squarePx} inset=${geometry.insetPx}") }
+    // indented comment line that is also rather long and would run off the side of the circle if not wrapped</code></pre>
+<p>Inline <code>someVeryLongIdentifierNameThatDoesNotBreakNaturally()</code> code.</p>
+<p>Final line of the wide fixture.</p>
+</body>
+</html>

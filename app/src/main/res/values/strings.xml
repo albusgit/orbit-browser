@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Orbit</string>
+    <string name="voice_prompt">Say a site or a search</string>
+    <string name="keyboard_label">Site or search</string>
+    <string name="action_voice">Speak</string>
+    <string name="action_keyboard">Type</string>
+    <string name="action_back">Back</string>
+    <string name="action_forward">Forward</string>
+    <string name="action_reload">Reload</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_home">Home</string>
+    <string name="action_close">Close</string>
+    <string name="action_retry">Retry</string>
+    <string name="mode_scroll">Round scroll</string>
+    <string name="mode_desktop">Zoom view</string>
+    <string name="error_title">Can\'t load page</string>
+    <string name="error_no_webview">This watch has no usable WebView, so Orbit can\'t show web pages.</string>
+    <string name="no_speech">Voice input isn\'t available. Use the keyboard.</string>
+</resources>

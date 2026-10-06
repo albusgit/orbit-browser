@@ -1,0 +1,78 @@
+/*
+ * Orbit — Round Scroll mode.
+ *
+ * Caps the content column to the square inscribed in the round screen and pads the
+ * top and bottom by the circle-to-square gap, so the first and last lines are never
+ * cut by the rim. The geometry comes from round.js as CSS variables:
+ *   --orbit-d      screen diameter (CSS px)
+ *   --orbit-sq     inscribed square side, d / sqrt(2)
+ *   --orbit-inset  (d - sq) / 2
+ * Rules are !important because pages load their own styles after ours.
+ */
+
+html.orbit-round {
+  -webkit-text-size-adjust: 100% !important;
+  text-size-adjust: 100% !important;
+  overflow-x: hidden !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+html.orbit-round body {
+  box-sizing: border-box !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: var(--orbit-sq) !important;
+  margin: 0 auto !important;
+  padding: var(--orbit-inset) 0 !important;
+  overflow-x: hidden !important;
+  /* break-word, not anywhere: anywhere also shrinks min-content and crushes table cells. */
+  overflow-wrap: break-word !important;
+  /* Uses the page's lang; much nicer than mid-word breaks in a ~170px column. */
+  -webkit-hyphens: auto;
+  hyphens: auto;
+}
+
+/* Nothing may be wider than the column; border-box so padding and borders count too. */
+html.orbit-round body * {
+  box-sizing: border-box !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+
+html.orbit-round img,
+html.orbit-round video,
+html.orbit-round picture,
+html.orbit-round canvas {
+  height: auto !important;
+}
+
+html.orbit-round iframe,
+html.orbit-round embed,
+html.orbit-round object,
+html.orbit-round svg {
+  max-width: 100% !important;
+}
+
+/* Tables wider than the column get wrapped in this by round.js and scroll inside it.
+   Layout tables that fit keep their table layout. */
+html.orbit-round .orbit-scroll-x {
+  display: block !important;
+  overflow-x: auto !important;
+  max-width: 100% !important;
+}
+
+/* Code wraps rather than running off the edge of the circle. */
+html.orbit-round pre,
+html.orbit-round code,
+html.orbit-round kbd,
+html.orbit-round samp {
+  white-space: pre-wrap !important;
+  overflow-wrap: break-word !important;
+}
+
+/* Multi-column layouts collapse to one column. */
+html.orbit-round [style*="column-count"],
+html.orbit-round [class*="columns"] {
+  column-count: 1 !important;
+}
