@@ -146,8 +146,10 @@ app (BrowserController, OrbitExtension) ⇄ native port "orbit" ⇄ background.j
   - a double tap uses Gecko's own block zoom.
 - **Long press on a link** comes from Gecko's context-menu callback. Alerts, confirms and `<select>` menus use system dialogs.
 
-**Size:** the release APK is about 100 MB, almost all of it Gecko's native code. Native libraries
-stay compressed in the APK, which makes the Wi-Fi sideload faster; they are unpacked at install.
+**Size:** the release APK is 88 MiB, almost all of it Gecko's native code. Native libraries and
+the dex stay compressed in the APK, which makes the Wi-Fi sideload faster; they are unpacked at
+install. Gecko's crash-reporting libraries are left out, since Orbit sets no crash handler and so
+never starts them. So are uBlock's dashboard-only fonts and editor.
 
 ### Content blocking: uBlock Origin
 
@@ -271,9 +273,15 @@ You need JDK 17 or later and an Android SDK with `platforms;android-37.2`, becau
 ./gradlew assembleRelease        # minified (R8); sign it with your own key
 ```
 
-The release APK is about **100 MB** (arm64 only). Almost all of that is Gecko: 152 MB of native
-code uncompressed, plus a 15 MB `omni.ja`. uBlock Origin adds about 4 MB. The WebView build
-was 5 MB, but this watch can't run it.
+The release APK is **88 MiB** (arm64 only). Almost all of that is Gecko:
+- `libxul.so` is 65 MB compressed (152 MB on disk). It is already stripped, and APKs only allow deflate.
+- `omni.ja` is 15 MB.
+- The other Gecko libraries are about 6 MB.
+
+Orbit's compressed dex is about 3 MB and uBlock Origin about 3 MB. To get here from 95 MiB in
+0.2.0, the dex is now compressed, and the unused crash-reporting libraries and uBlock's
+dashboard-only files are left out. A smaller build would need a custom Gecko build. The
+WebView build was 5 MB, but this watch can't run it.
 
 ### Screenshots without a device
 
@@ -380,7 +388,7 @@ Also check on both sizes:
 - **Gecko's double-tap zoom** fits a block to the screen width, not the inscribed square as the WebView build did.
 - **Prompts:** `alert`, `confirm` and `<select>` work. Text prompts, logins, file pickers and date/colour pickers are dismissed.
 - **Extension pages:** the reader is a `moz-extension:` page, so its URL is not the article's. Orbit shows and bookmarks the article's URL.
-- **APK size:** about 100 MB, the cost of bringing an engine (see above).
+- **APK size:** 88 MiB, the cost of bringing an engine (see above). Install takes a few minutes on the watch.
 
 ### Phase 2+ (documented, not built): companion phone app
 

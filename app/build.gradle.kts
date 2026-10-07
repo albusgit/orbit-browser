@@ -15,8 +15,8 @@ android {
         applicationId = "com.albustech.orbit"
         minSdk = 30 // Wear OS 3+; the Watch6 Classic ships Wear OS 4 (API 33)
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.2.1"
         // GeckoView ships per-ABI; the Watch6 (and every current Wear OS watch) is arm64.
         ndk { abiFilters += listOf("arm64-v8a") }
     }
@@ -24,7 +24,16 @@ android {
     packaging {
         // Keep Gecko's ~150 MB of native code compressed in the APK: the file is sideloaded over
         // Wi-Fi, so a smaller download wins over skipping extraction at install.
-        jniLibs { useLegacyPackaging = true }
+        jniLibs {
+            useLegacyPackaging = true
+            // Gecko's crash reporting. libcrashhelper is only loaded by its CrashHelper service,
+            // which GeckoView starts only when GeckoRuntimeSettings.crashHandler is set, and
+            // nothing loads libcrashtools without it. Orbit sets no crash handler: if it ever
+            // does, put these back.
+            excludes += listOf("**/libcrashhelper.so", "**/libcrashtools.so")
+        }
+        // Compressed code: 6 MB stored becomes ~2.5 MB to transfer; unpacked once at install.
+        dex { useLegacyPackaging = true }
     }
 
     buildTypes {
@@ -93,6 +102,9 @@ abstract class UnpackXpi : DefaultTask() {
             from(archives.zipTree(xpi))
             into(outputDir.dir("extensions/ublock"))
             exclude("META-INF/**") // AMO's signature: not checked for built-in extensions
+            // Only uBlock's dashboard and popup use these, and Orbit never shows either:
+            // its fonts, filter editor and code formatter. The engine and lists are untouched.
+            exclude("css/fonts/**", "lib/codemirror/**", "js/codemirror/**", "lib/js-beautify/**")
         }
     }
 }
