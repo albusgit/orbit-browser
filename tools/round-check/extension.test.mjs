@@ -125,6 +125,7 @@ test('bridge.js: postMessage shim, commands, taps and throttled metrics', async 
   const listeners = {};
   const docListeners = {};
   let scrolledTo = null;
+  let cleared = 0;
   const link = { closest: (sel) => (sel.includes('a[href]') ? {} : null) };
   const plain = { closest: () => null };
   const orbitLinks = { steps: [], step(d) { this.steps.push(d); }, stop() {}, activate() {} };
@@ -133,6 +134,7 @@ test('bridge.js: postMessage shim, commands, taps and throttled metrics', async 
     scrollY: 120,
     addEventListener: (t, f) => { listeners[t] = f; },
     scrollTo: (x, y) => { scrolledTo = y; },
+    getSelection: () => ({ removeAllRanges: () => { cleared++; } }),
   };
   const ctx = {
     window: win,
@@ -155,6 +157,8 @@ test('bridge.js: postMessage shim, commands, taps and throttled metrics', async 
   eq(orbitLinks.steps, [-1]);
   win.__command({ orbit: 'scrollToFraction', arg: 0.5 });
   assert.equal(scrolledTo, 1000);
+  win.__command({ orbit: 'clearSelection' });
+  assert.equal(cleared, 1);
   docListeners.click({ target: link });
   eq(sent.at(-1), { type: 'tap', interactive: true });
   docListeners.click({ target: plain });

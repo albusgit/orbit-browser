@@ -49,6 +49,7 @@ fun SettingsScreen(
     settings: Settings,
     onSearch: (String) -> Unit,
     onBlock: (Boolean) -> Unit,
+    onDesktop: (Boolean) -> Unit,
     onKeepOn: (Boolean) -> Unit,
     onSerif: (Boolean) -> Unit,
     onClearHistory: () -> Unit,
@@ -63,6 +64,12 @@ fun SettingsScreen(
             }, secondary = current.label)
         }
         item { MenuSwitch(stringResource(R.string.settings_block), settings.blockTrackers, onBlock, secondary = stringResource(R.string.settings_block_lists)) }
+        item {
+            MenuSwitch(
+                stringResource(R.string.settings_desktop), settings.desktopSites, onDesktop,
+                secondary = stringResource(if (settings.desktopSites) R.string.settings_desktop_on else R.string.settings_desktop_off),
+            )
+        }
         item { MenuSwitch(stringResource(R.string.settings_keep_on), settings.keepScreenOn, onKeepOn) }
         item { MenuSwitch(stringResource(R.string.settings_serif), settings.reader.serif, onSerif) }
         item { MenuButton(R.drawable.ic_delete, stringResource(R.string.action_clear_history), onClearHistory) }

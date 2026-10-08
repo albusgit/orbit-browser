@@ -23,15 +23,20 @@ In particular, Gecko-specific behaviour is unverified until it runs on the watch
 
 ## What it does
 
-### Three ways to draw a page (remembered per site)
+### Four ways to draw a page (remembered per site)
 
 | Mode | When | How |
 |---|---|---|
-| **Paged Reader** | Default for articles (site mode *Auto*), or forced with *Reader* | Mozilla Readability extracts the article, then Orbit sets it as **circular pages**: two floats whose `shape-outside` polygons cover everything outside the circle, so lines are short at the top and bottom and full width in the middle. Each bezel click turns one page, with a dial-swing animation and a haptic tick. Images get their own page, scaled into the inscribed square. Tables and code get a page whose square scrolls. A progress arc runs around the rim, and "4 / 12" appears for a moment at the bottom. Pure `#000` background. |
-| **Round Scroll** | Pages that aren't articles, or *Scroll* | The content column is capped to the inscribed square (d/√2) and padded top and bottom by the circle-to-square gap. The viewport is forced to `device-width`. Fixed headers and cookie bars go back into the flow. Only tables too wide for the column get a horizontal scroll box. Code wraps. A radial vignette fades the rim on purpose. A scroll arc sits on the right edge. |
-| **Zoom view** | Complex layouts, or *Zoom* | The page's own layout in overview, with pinch zoom. Double-tap zooms the tapped block to fit the **inscribed square**, not the full width. The bezel zooms by default. |
+| **Mobile** | The default (site mode *Mobile*) | The site's own **mobile version**, exactly as a phone would show it: Gecko's mobile user agent and viewport, nothing restyled. Pinch zooms. With **Settings → Desktop sites** on, sites get their desktop version instead (see *Desktop*). |
+| **Paged Reader** | Articles (site mode *Mobile*), or forced with *Reader* | Mozilla Readability extracts the article, then Orbit sets it as **circular pages**: two floats whose `shape-outside` polygons cover everything outside the circle, so lines are short at the top and bottom and full width in the middle. Each bezel click turns one page, with a dial-swing animation and a haptic tick. Images get their own page, scaled into the inscribed square. Tables and code get a page whose square scrolls. A progress arc runs around the rim, and "4 / 12" appears for a moment at the bottom. Pure `#000` background. |
+| **Round fit** | Opt-in, with *Round fit* | The content column is capped to the inscribed square (d/√2) and padded top and bottom by the circle-to-square gap. The viewport is forced to `device-width`. Fixed headers and cookie bars go back into the flow. Only tables too wide for the column get a horizontal scroll box. Code wraps. A radial vignette fades the rim on purpose. A scroll arc sits on the right edge. |
+| **Desktop** | *Desktop*, or every site with **Settings → Desktop sites** on | The site's desktop version (desktop user agent and width) in overview. Pinch zooms, or pick *Zoom* on the bezel arc to zoom with the bezel. Double-tap zooms the tapped block. |
 
-Switch with **More → View** (Auto → Reader → Round scroll → Zoom). The choice is saved for the site.
+Round fit restyles the page to fit the circle. It reads well on simple pages but breaks some
+sites, so it is no longer the default.
+
+Switch with **More → View** (Mobile → Reader → Round fit → Desktop). The choice is saved for the site
+and wins over the Desktop sites setting.
 
 ### Search results as native cards
 
@@ -48,7 +53,7 @@ images or news). It never shows these pages as web pages:
   - The last card loads the next page of results.
 - **Overview**: turn back past the first result, or pinch, to get a list whose rows follow the circle. The query pill at the top is for editing the search, and its mic button starts a new voice search.
 - **Back** from a result returns to the same card.
-- **Fallback**: if a page yields no results (a CAPTCHA, a consent page, a new layout), Orbit shows the real page in Round Scroll. Nothing gets stuck.
+- **Fallback**: if a page yields no results (a CAPTCHA, a consent page, a new layout), Orbit shows the real page. Nothing gets stuck.
 
 DuckDuckGo HTML stays the default engine. Google can't be tested live from the build machine
 (it serves a CAPTCHA there), so its extractor is checked against saved pages. Bing is also
@@ -60,7 +65,8 @@ checked live.
   - The mic fills the centre.
   - Up to six actions orbit it: keyboard, continue reading, three bookmarks (as letter avatars), and More.
   - The bezel moves a highlight ring around them, and the highlighted name curves along the bottom edge.
-- **Ring menu.** Tap the centre of a page to open it. Eight wedges: Search, Forward, Reload, Bookmark, Tabs, History, More, Back.
+- **On a page**, a **tap** (anywhere that isn't a link) brings back the chrome: the time, the site and the bezel-mode arc. A **hold** opens the ring menu.
+- **Ring menu.** Hold anywhere on a page to open it. Eight wedges: Search, Forward, Reload, Bookmark, Tabs, History, More, Back.
   - The bezel moves the highlight and a centre tap confirms; you can also tap a wedge directly.
   - Unavailable items are dimmed, never removed, so positions stay put.
   - **More** is a second ring: View, Text size, This site, Open on phone, Bookmarks, Settings, Home, Close. Its centre shows the connection and the blocked count.
@@ -69,16 +75,18 @@ checked live.
 
 ### The bezel
 
-What the bezel does is shown as **three tappable segments along the bottom edge** whenever the
-chrome is up: *Pages · Links · Text* in Reader, *Scroll · Links · Zoom* elsewhere. Tap one, or
-long-press the centre to cycle.
+What the bezel does is shown as **four tappable segments along the bottom edge** whenever the
+chrome is up: *Pages · Links · Cursor · Text* in Reader, *Scroll · Links · Cursor · Zoom*
+elsewhere. Tap the page to bring them back, then tap one. Every page starts in *Scroll*.
+**Pinch zooms in every mode.**
 
-1. **Scroll**: smooth steps with momentum (a fast spin flings) in Round Scroll; **page turns** in Reader.
+1. **Scroll**: smooth steps with momentum (a fast spin flings); **page turns** in Reader.
 2. **Links**: steps through the visible links and controls in reading order, with a glowing ring around the focused one.
    - "Link 3 of 9" curves along the top, and a pill at the bottom says **Open link · Hold for options**.
    - Only the pill opens the link. A tap elsewhere just shows the chrome, so nothing opens by accident.
    - Past the last visible link the page scrolls (or turns) and focus continues. Back leaves link mode.
-3. **Zoom**: zooms the page. In Reader it changes the text size and re-paginates on the same word.
+3. **Cursor**: the screen becomes a trackpad. Drag anywhere to move a small ring cursor (it moves 1.6× the finger, so the finger never hides the target), and **tap to click** under it. Pushing the cursor past the top or bottom of the circle scrolls the page. The bezel still scrolls, a hold still opens the ring, and two fingers still pinch. Moving the cursor brings back the mode arc.
+4. **Zoom**: zooms the page with the bezel. In Reader it changes the text size and re-paginates on the same word.
 
 Every bezel click gives a haptic tick. The end of a page or article gives a firmer bump.
 
@@ -133,17 +141,17 @@ app (BrowserController, OrbitExtension) ⇄ native port "orbit" ⇄ background.j
 ```
 
 - **`background.js`** is the hub, kept stateless apart from a few settings. It:
-  - registers the Round Scroll layout and the WebGL guard as document-start content scripts;
+  - registers the Round fit layout (when a site uses it) and the WebGL guard as document-start content scripts;
   - injects Readability, `serp.js` and `links.js` on request (`tabs.executeScript`, main frame only);
   - relays page messages to the app and app commands to pages, one at a time, in order;
   - blocks images for the per-site *Block images* setting and on search-results pages;
   - holds the last few reader payloads.
-- **`bridge.js`** runs at document start in every web page. It gives Orbit's scripts their `orbitBridge` and reports the scroll position (≤10 times a second). It also reports whether a tap hit a link or control, since Gecko has no synchronous hit test. A tap on nothing near the centre opens the ring.
+- **`bridge.js`** runs at document start in every web page. It gives Orbit's scripts their `orbitBridge` and reports the scroll position (≤10 times a second). It also reports whether a tap hit a link or control, since Gecko has no synchronous hit test: a tap on nothing shows Orbit's chrome, a hold on nothing opens the ring (and clears any word selection the hold started).
 - **Isolated from pages.** Everything runs in the extension's sandbox, so pages can neither see Orbit's scripts nor post messages as them. With WebView they could.
 - **The reader is an extension page** (`moz-extension://…/reader.html#u=<article>`). The app sanitises the article with jsoup and hands it to `background.js`; the page asks for it by token. The extension's CSP stops anything in the article from running. Back from it skips the article's source page as before. Opened from history after a restart, it fetches the article again.
 - **Scrolling and zoom** go through Gecko's own async pan/zoom:
   - each bezel detent asks for a smooth scroll of one step, and a fast spin becomes one long smooth scroll;
-  - in Zoom view the bezel sends a short pinch;
+  - in *Zoom* bezel mode the bezel sends a short pinch, and Cursor mode clicks with a synthetic tap;
   - a double tap uses Gecko's own block zoom.
 - **Long press on a link** comes from Gecko's context-menu callback. Alerts, confirms and `<select>` menus use system dialogs.
 
@@ -179,7 +187,7 @@ app/src/main/
     manifest.json, background.js        the hub: app port, content scripts, injection, image blocking
     bridge.js                           page side: orbitBridge, scroll metrics, taps, commands
     webgl.js                            WebGL guard (exportFunction into the page)
-    round.css, round.js                 Round Scroll (registered at document start)
+    round.css, round.js                 Round fit (registered at document start)
     Readability.js, Readability-readerable.js   Mozilla Readability 0.6.0 (Apache 2.0)
     extract.js                          runs Readability, sanitises the article (allow-list), posts it
     reader.html, reader-boot.js,
@@ -216,7 +224,7 @@ third_party/ublock/ uBlock Origin XPI (signed, from addons.mozilla.org), README,
 
 ### How the reader is wired
 
-1. A page loads in Round Scroll.
+1. A page loads (Mobile, or whichever view the site uses).
 2. If the site is *Auto* or *Reader*, the extension injects Readability and `extract.js` into the page's sandbox. The article is sanitised against an allow-list in an inert document and posted to the app.
 3. The app sanitises the article again with a jsoup allow-list (`ArticleSanitizer`), outside the page's reach.
 4. `ReaderTemplate` builds the payload (header, content, layout config). The app hands it to `background.js` and loads `moz-extension://…/reader.html#u=<article>&t=<token>`, which asks for it by token. The extension's CSP allows no inline script.
@@ -301,7 +309,7 @@ review, not pixel comparison.
 
 ```sh
 cd tools/round-check && npm install
-node check.mjs          # Round Scroll: every word inside the inscribed square, top/bottom lines clear
+node check.mjs          # Round fit: every word inside the inscribed square, top/bottom lines clear
 node reader-check.mjs   # Reader: every word inside the circle, images in the square, nothing lost,
                         #   position kept across re-pagination, timing with CPU throttled 6×
 node links-check.mjs    # Link focus: reading order, scroll/page continuation, back, activate
@@ -313,7 +321,7 @@ They run the same page scripts the extension injects, in Chromium. The checks co
 logic and layout; GeckoView itself only runs on the watch. They run at 432 and 480 px and
 three densities, and write screenshots with a circle mask to `./out`. Latest results:
 
-- 18/18 Round Scroll cases.
+- 18/18 Round fit cases.
 - 12/12 reader cases. With the CPU throttled 6×, the first page shows in about 0.3–0.5 s and a page turn takes one or two frames.
 - 4/4 link-focus cases.
 - Search results:
@@ -365,7 +373,7 @@ three densities, and write screenshots with a circle mask to `./out`. Latest res
 | A long Wikipedia article (`en.wikipedia.org/wiki/Orbital_mechanics`) | Reader opens automatically, pages turn per bezel click without lag, "n / N" label, Text size keeps the position, reopening restores the page |
 | A Google, DuckDuckGo and Bing search | Result cards appear (not the page); the bezel snaps card to card; Open goes to the site directly; Back returns to the same card. **Google can't be checked live from the build machine**, so check it here first. |
 | A news site full of ads | Blocked count in the More ring, ad slots hidden rather than left blank, Reader skips the clutter, memory stays flat |
-| Hacker News (`news.ycombinator.com`) | Round Scroll with no clipping; link mode steps in reading order; the *Open link* pill opens the focused link |
+| Hacker News (`news.ycombinator.com`) | Mobile version renders; in Round fit, no clipping; link mode steps in reading order; the *Open link* pill opens the focused link |
 | A WebGL map (`maps.google.com` or similar) | Falls back to 2D or a message; turning on *This site → Rich graphics* brings WebGL back |
 | Wide tables or code (`en.wikipedia.org/wiki/Comparison_of_programming_languages`, a GitHub file view) | Tables scroll inside the column; code wraps; Zoom view's double-tap fits a block to the square |
 | A login form (`github.com/login`) | Link mode → tap a field → keyboard; the bezel still works afterwards |
@@ -379,7 +387,7 @@ Also check on both sizes:
 
 ### Known limitations
 
-- **Mid-scroll clipping in Round Scroll.** While scrolling, lines passing the top and bottom bands are partly clipped; the rim vignette fades that band on purpose. Text never clips at rest at the top or bottom of the page. Reader mode has no such band.
+- **Mid-scroll clipping in Round fit.** While scrolling, lines passing the top and bottom bands are partly clipped; the rim vignette fades that band on purpose. Text never clips at rest at the top or bottom of the page. Reader mode has no such band.
 - **Positioned elements.** Only shallow fixed and sticky elements go back into the flow, to keep the pass cheap.
 - **Pages with JavaScript turned off** (per-site toggle) get neither the round layout nor Reader nor link focus, because all three are injected JS.
 - **No live suggestions while typing.** Wear keyboards are full-screen, so suggestions appear when the keyboard closes. Inside the keyboard, recent sites are offered as quick choices.

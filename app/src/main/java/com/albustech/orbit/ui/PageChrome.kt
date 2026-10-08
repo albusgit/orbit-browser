@@ -7,17 +7,19 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.CurvedDirection
@@ -34,17 +36,18 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.curvedText
 import com.albustech.orbit.R
-import kotlin.math.atan2
-import kotlin.math.hypot
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /** Each bezel-mode segment spans this many degrees of the bottom edge. */
-private const val SEGMENT_DEG = 34f
+private const val SEGMENT_DEG = 36f
 private const val SEGMENT_GAP_DEG = 2f
 private val BAND = 30.dp
 
 /**
- * The bezel's mode, always visible with the chrome (design 2b/3b): three curved segments along
- * the bottom edge, tappable. Replaces the hidden centre long-press (which still works).
+ * The bezel's mode, visible with the chrome (design 2b/3b): curved segments along the bottom
+ * edge, tappable. This is how modes switch: a tap on the page brings the chrome back.
  */
 @Composable
 fun BoxScope.BezelModeArc(
@@ -74,7 +77,7 @@ fun BoxScope.BezelModeArc(
                             curvedText(
                                 label,
                                 color = if (on) colors.onPrimary else colors.onSurface,
-                                fontSize = 13.sp,
+                                fontSize = 14.sp,
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
@@ -82,30 +85,25 @@ fun BoxScope.BezelModeArc(
                     }
                 }
             }
-            // Touch only on the band itself, so the page keeps the rest of the screen.
-            val bandPx = BAND.value * geometry.density
-            Box(
-                Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .height((BAND.value + 8f).dp)
-                    .pointerInput(labels.size) {
-                        detectTapGestures { p ->
-                            val dx = p.x - geometry.centerXPx
-                            val dy = (p.y + (geometry.heightPx - size.height)) - geometry.centerYPx
-                            val r = hypot(dx, dy)
-                            if (r < geometry.radiusPx - bandPx - 6f * geometry.density) return@detectTapGestures
-                            // 90° is straight down; segments run right-to-left in reading order
-                            // because the text is laid out counter-clockwise.
-                            val deg = Math.toDegrees(atan2(dy, dx).toDouble()).toFloat()
-                            val total = labels.size * SEGMENT_DEG + (labels.size - 1) * SEGMENT_GAP_DEG
-                            val fromLeft = (90f + total / 2f) - deg
-                            if (fromLeft < 0 || fromLeft > total) return@detectTapGestures
-                            val i = (fromLeft / (SEGMENT_DEG + SEGMENT_GAP_DEG)).toInt().coerceIn(0, labels.lastIndex)
-                            onSelect(i)
-                        }
-                    },
-            )
+            // One touch target per segment, centred on it, so the page keeps the rest of the
+            // screen. 90° is straight down; segments run right-to-left in reading order because
+            // the text is laid out counter-clockwise.
+            val select by rememberUpdatedState(onSelect)
+            val r = geometry.radiusPx - BAND.value * geometry.density / 2f
+            val sidePx = 2f * r * sin(Math.toRadians(SEGMENT_DEG / 2.0)).toFloat()
+            val total = labels.size * SEGMENT_DEG + (labels.size - 1) * SEGMENT_GAP_DEG
+            labels.indices.forEach { i ->
+                val deg = (90f + total / 2f) - (i * (SEGMENT_DEG + SEGMENT_GAP_DEG) + SEGMENT_DEG / 2f)
+                val rad = Math.toRadians(deg.toDouble())
+                val x = geometry.centerXPx + r * cos(rad).toFloat() - sidePx / 2f
+                val y = geometry.centerYPx + r * sin(rad).toFloat() - sidePx / 2f
+                Box(
+                    Modifier
+                        .offset { IntOffset(x.roundToInt(), y.roundToInt()) }
+                        .size((sidePx / geometry.density).dp)
+                        .pointerInput(i) { detectTapGestures { select(i) } },
+                )
+            }
         }
     }
 }
@@ -139,14 +137,14 @@ fun BoxScope.LinkModeControls(
     )
 }
 
-/** Transparent layer that turns any tap into "show the chrome" and a centre hold into a mode switch. */
+/** Transparent layer that turns any tap into "show the chrome" and a hold into the ring. */
 @Composable
-fun TapToShowChrome(geometry: RoundGeometry, onTap: () -> Unit, onCenterHold: () -> Unit) {
+fun TapToShowChrome(onTap: () -> Unit, onHold: () -> Unit) {
     Box(
         Modifier.fillMaxSize().pointerInput(Unit) {
             detectTapGestures(
                 onTap = { onTap() },
-                onLongPress = { p -> if (geometry.isNearCenter(p.x, p.y)) onCenterHold() },
+                onLongPress = { onHold() },
             )
         },
     )

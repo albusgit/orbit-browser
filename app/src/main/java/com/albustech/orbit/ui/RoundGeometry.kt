@@ -35,17 +35,10 @@ data class RoundGeometry(
     val squareCss: Float get() = squareDp
     val insetCss: Float get() = insetDp
 
-    /** True if (x, y) in px lies within [fraction] of the radius from the centre. */
-    fun isNearCenter(x: Float, y: Float, fraction: Float = CENTER_TAP_FRACTION): Boolean =
-        hypot(x - centerXPx, y - centerYPx) <= radiusPx * fraction
-
     /** True if (x, y) in px lies inside the visible circle. */
     fun isInsideCircle(x: Float, y: Float): Boolean = hypot(x - centerXPx, y - centerYPx) <= radiusPx
 
     companion object {
         val SQRT2: Float = sqrt(2f)
-
-        /** Taps closer to the centre than this (as a fraction of the radius) count as "centre". */
-        const val CENTER_TAP_FRACTION = 0.4f
     }
 }

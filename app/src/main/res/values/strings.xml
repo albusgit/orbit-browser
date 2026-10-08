@@ -25,13 +25,14 @@
     <string name="menu_site">This site</string>
     <string name="menu_settings">Settings</string>
     <string name="menu_view">View</string>
-    <string name="view_auto">Auto (Reader for articles)</string>
+    <string name="view_auto">Mobile (Reader for articles)</string>
     <string name="view_reader">Reader</string>
-    <string name="view_scroll">Round scroll</string>
-    <string name="view_zoom">Zoom view</string>
+    <string name="view_scroll">Round fit</string>
+    <string name="view_zoom">Desktop</string>
     <string name="bezel_scroll">Scroll</string>
     <string name="bezel_pages">Turn pages</string>
     <string name="bezel_links">Links</string>
+    <string name="bezel_cursor">Cursor</string>
     <string name="bezel_zoom">Zoom</string>
     <string name="bezel_text">Text size</string>
     <string name="conn_wifi">Wi-Fi</string>
@@ -49,6 +50,9 @@
     <string name="settings_search">Search engine</string>
     <string name="settings_block">Block ads and trackers</string>
     <string name="settings_block_lists">uBlock Origin</string>
+    <string name="settings_desktop">Desktop sites</string>
+    <string name="settings_desktop_off">Off: mobile versions</string>
+    <string name="settings_desktop_on">On: desktop versions</string>
     <string name="error_engine">Orbit\'s web engine couldn\'t start</string>
     <string name="settings_keep_on">Keep screen on while reading</string>
     <string name="settings_serif">Serif reader font</string>

@@ -29,6 +29,8 @@ data class Settings(
     val reader: ReaderStyle = ReaderStyle(),
     val keepScreenOn: Boolean = false,
     val blockTrackers: Boolean = true,
+    /** Off: every site's mobile version. On: desktop versions, shown whole (per-site View still wins). */
+    val desktopSites: Boolean = false,
     /** The launcher's "Turn bezel to pick" hint shows until the bezel is first used there. */
     val bezelHintSeen: Boolean = false,
 ) {
@@ -88,6 +90,8 @@ class SettingsRepository(context: Context) {
 
     fun setBlockTrackers(on: Boolean) = edit { putBoolean(BLOCK_TRACKERS, on) }
 
+    fun setDesktopSites(on: Boolean) = edit { putBoolean(DESKTOP_SITES, on) }
+
     fun setBezelHintSeen() {
         if (!state.value.bezelHintSeen) edit { putBoolean(BEZEL_HINT_SEEN, true) }
     }
@@ -107,6 +111,7 @@ class SettingsRepository(context: Context) {
         ),
         keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, false),
         blockTrackers = prefs.getBoolean(BLOCK_TRACKERS, true),
+        desktopSites = prefs.getBoolean(DESKTOP_SITES, false),
         bezelHintSeen = prefs.getBoolean(BEZEL_HINT_SEEN, false),
     )
 
@@ -120,6 +125,7 @@ class SettingsRepository(context: Context) {
         const val READER_SERIF = "reader_serif"
         const val KEEP_SCREEN_ON = "keep_screen_on"
         const val BLOCK_TRACKERS = "block_trackers"
+        const val DESKTOP_SITES = "desktop_sites"
         const val BEZEL_HINT_SEEN = "bezel_hint_seen"
     }
 }

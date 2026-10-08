@@ -34,6 +34,7 @@ fun bezelLabel(b: BezelMode, render: RenderMode): String = stringResource(
     when (b) {
         BezelMode.SCROLL -> if (render == RenderMode.READER) R.string.bezel_pages else R.string.bezel_scroll
         BezelMode.LINKS -> R.string.bezel_links
+        BezelMode.CURSOR -> R.string.bezel_cursor
         BezelMode.ZOOM -> if (render == RenderMode.READER) R.string.bezel_text else R.string.bezel_zoom
     },
 )

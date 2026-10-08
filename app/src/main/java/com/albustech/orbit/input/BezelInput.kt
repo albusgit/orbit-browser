@@ -21,10 +21,11 @@ import kotlin.math.roundToInt
  * to the view instead, so [attach] listens there too. Whichever path sees an event consumes
  * it, so it is handled once. Detents go to [onDetents]; what they do depends on the bezel mode.
  *
- * Gecko has no synchronous hit test, so taps and long presses near the centre wait a moment
- * for the page's answer: [wasInteractiveTap] (bridge.js saw the tap land on a link or control)
- * and [hadContextMenu] (Gecko reported a long press on a link). Only if neither came does the
- * centre gesture open Orbit's ring or switch the bezel mode.
+ * Touch on the page: a tap shows Orbit's chrome (and the bezel-mode arc), a hold opens the ring.
+ * Gecko has no synchronous hit test, so both wait a moment for the page's answer:
+ * [wasInteractiveTap] (bridge.js saw the tap land on a link or control) and [hadContextMenu]
+ * (Gecko reported a long press on a link, which opens the link's wedges instead). Pans and
+ * pinches cancel a hold, so they stay the page's.
  */
 class BezelInput(
     private val view: View,
@@ -44,11 +45,11 @@ class BezelInput(
     /** Any page interaction (bezel or touch scroll); the UI hides its chrome. */
     var onInteraction: () -> Unit = {}
 
-    /** A plain tap near the centre (not on a link or field). */
-    var onCenterTap: () -> Unit = {}
+    /** A tap anywhere that isn't on a link or control: show the chrome. */
+    var onPageTap: () -> Unit = {}
 
-    /** A long press near the centre (not on a link): switch the bezel mode. */
-    var onCenterLongPress: () -> Unit = {}
+    /** A long press anywhere that isn't on a link: open the ring. */
+    var onHold: () -> Unit = {}
 
     /** A long press on a link (reported by Gecko): open the link wedges. */
     var onLinkLongPress: (url: String, title: String?) -> Unit = { _, _ -> }
@@ -97,16 +98,12 @@ class BezelInput(
             }
 
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                if (geometry.isNearCenter(e.x, e.y)) {
-                    handler.postDelayed({ if (!wasInteractiveTap()) onCenterTap() }, PAGE_ANSWER_MS)
-                }
+                handler.postDelayed({ if (!wasInteractiveTap()) onPageTap() }, PAGE_ANSWER_MS)
                 return false
             }
 
             override fun onLongPress(e: MotionEvent) {
-                if (geometry.isNearCenter(e.x, e.y)) {
-                    handler.postDelayed({ if (!hadContextMenu()) onCenterLongPress() }, PAGE_ANSWER_MS)
-                }
+                handler.postDelayed({ if (!hadContextMenu()) onHold() }, HOLD_ANSWER_MS)
             }
         })
         view.setOnTouchListener { _, ev ->
@@ -120,7 +117,10 @@ class BezelInput(
     private companion object {
         const val TAG = "OrbitBezel"
 
-        /** How long a centre gesture waits for the page to say it hit something. */
+        /** How long a tap waits for the page to say it hit something. */
         const val PAGE_ANSWER_MS = 180L
+
+        /** A hold waits longer: Gecko's own long press (its context menu) comes after Android's. */
+        const val HOLD_ANSWER_MS = 350L
     }
 }

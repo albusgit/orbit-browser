@@ -43,11 +43,8 @@ class RoundGeometryTest {
     }
 
     @Test
-    fun `centre and circle hit tests`() {
+    fun `circle hit test`() {
         val g = RoundGeometry(480, 480, 2f)
-        assertTrue(g.isNearCenter(240f, 240f))
-        assertTrue(g.isNearCenter(240f + 90f, 240f))
-        assertFalse(g.isNearCenter(240f + 100f, 240f))
         assertTrue(g.isInsideCircle(240f, 1f))
         assertFalse(g.isInsideCircle(5f, 5f))
     }

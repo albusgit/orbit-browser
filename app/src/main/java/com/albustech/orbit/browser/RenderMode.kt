@@ -1,29 +1,45 @@
 package com.albustech.orbit.browser
 
+import com.albustech.orbit.data.db.SiteMode
+
 /** How the current page is drawn on the round screen. */
 enum class RenderMode {
     /** Article text in circular pages; the bezel turns pages. */
     READER,
 
-    /** Content column capped to the inscribed square, vertical scrolling. */
+    /** The site's own mobile version, as a phone would show it. The default. */
+    MOBILE,
+
+    /** Opt-in "Round fit": the content column capped to the inscribed square. */
     SCROLL,
 
-    /** The page's own layout in overview with pinch/double-tap zoom. Fallback for complex sites. */
+    /** The site's desktop version, shown whole; pinch or bezel to zoom. */
     ZOOM,
+    ;
+
+    companion object {
+        /** How a page renders for a site's View choice, given the global Desktop sites setting. */
+        fun forSite(mode: SiteMode, desktopSites: Boolean): RenderMode = when (mode) {
+            SiteMode.SCROLL -> SCROLL
+            SiteMode.ZOOM -> ZOOM
+            SiteMode.AUTO, SiteMode.READER -> if (desktopSites) ZOOM else MOBILE
+        }
+    }
 }
 
-/** What the bezel does. Switched by a long press in the centre of the screen. */
+/** What the bezel does. Picked on the mode arc (a tap on the page shows it). */
 enum class BezelMode {
-    /** Scroll (Round Scroll / Zoom view) or turn pages (Reader). */
+    /** Scroll the page or turn pages (Reader). */
     SCROLL,
 
     /** Step through visible links and controls; a tap opens the focused one. */
     LINKS,
 
-    /** Zoom the page (Zoom view / Round Scroll) or change the text size (Reader). */
-    ZOOM;
+    /** Touch drives an on-screen cursor like a trackpad and a tap clicks under it; the bezel scrolls. */
+    CURSOR,
 
-    fun next(): BezelMode = entries[(ordinal + 1) % entries.size]
+    /** Zoom the page or change the text size (Reader). Pinch zooms in every mode. */
+    ZOOM,
 }
 
 /** The control links.js has focused. */

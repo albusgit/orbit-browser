@@ -21,7 +21,6 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -94,7 +93,9 @@ sealed interface Overlay {
  * The browser, round-native (design section 3):
  * - no page: the orbit launcher;
  * - a page: immersive, with the bezel-mode arc and "host · time" while the chrome shows;
- *   a tap in the centre opens the ring menu, a long press on a link opens its wedges;
+ *   a tap shows the chrome and its bezel-mode arc, a hold opens the ring menu, a hold on a
+ *   link opens its wedges;
+ * - cursor mode: touch moves a cursor like a trackpad, a tap clicks under it;
  * - link mode: a counter on top and one explicit "Open link" button;
  * - a search-results page: native result cards instead of the page.
  */
@@ -137,13 +138,11 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
         scope.launch { deps.repo.toggleBookmark(url, title, isMarked) }
         deps.actions.toast(resources.getString(if (isMarked) R.string.removed_bookmark else R.string.added_bookmark))
     }
-    fun cycleBezel() {
-        c.cycleBezelMode()
+    fun openRing() {
         bezel.haptics.confirm()
-        chromeVisible = true
+        c.clearSelection()
+        overlays.add(Overlay.Ring)
     }
-
-    val cycleBezelState by rememberUpdatedState(::cycleBezel)
     DisposableEffect(bezel, c) {
         bezel.onDetents = { n, t ->
             c.onBezel(n, bezel.stepPx, t)
@@ -153,14 +152,14 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
             chromeVisible = false
             deps.actions.onUserActivity()
         }
-        bezel.onCenterTap = { overlays.add(Overlay.Ring) }
-        bezel.onCenterLongPress = { cycleBezelState() }
+        bezel.onPageTap = { chromeVisible = true }
+        bezel.onHold = ::openRing
         bezel.onLinkLongPress = { url, title -> overlays.add(Overlay.Link(url, title)) }
         onDispose {
             bezel.onDetents = { _, _ -> }
             bezel.onInteraction = {}
-            bezel.onCenterTap = {}
-            bezel.onCenterLongPress = {}
+            bezel.onPageTap = {}
+            bezel.onHold = {}
             bezel.onLinkLongPress = { _, _ -> }
         }
     }
@@ -248,7 +247,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
             }
 
             if (linkMode) {
-                TapToShowChrome(geometry, onTap = { chromeVisible = true }, onCenterHold = ::cycleBezel)
+                TapToShowChrome(onTap = { chromeVisible = true }, onHold = ::openRing)
                 val f = c.focusedLink
                 LinkModeControls(
                     geometry = geometry,
@@ -256,6 +255,24 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
                     hasLink = f != null,
                     onOpen = c::activateFocusedLink,
                     onOptions = { f?.takeIf { it.href.isNotEmpty() }?.let { overlays.add(Overlay.Link(it.href, it.label)) } },
+                )
+            }
+
+            if (onPage && overlays.isEmpty() && c.bezelMode == BezelMode.CURSOR) {
+                CursorLayer(
+                    geometry = geometry,
+                    onClick = { x, y ->
+                        bezel.haptics.tick()
+                        c.clickAt(x, y)
+                    },
+                    onHold = ::openRing,
+                    // Moving the cursor brings back the chrome, so the mode arc is in reach.
+                    onMove = {
+                        chromeVisible = true
+                        deps.actions.onUserActivity()
+                    },
+                    onScroll = c::scrollByPx,
+                    forward = { ev -> c.view.onTouchEvent(ev) },
                 )
             }
 
@@ -281,7 +298,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
             }
 
             if (onPage && overlays.isEmpty()) {
-                val modes = listOf(BezelMode.SCROLL, BezelMode.LINKS, BezelMode.ZOOM)
+                val modes = BezelMode.entries
                 BezelModeArc(
                     geometry = geometry,
                     labels = modes.map { bezelLabel(it, c.renderMode) },
@@ -450,6 +467,7 @@ private fun OverlayContent(
             settings = settings,
             onSearch = deps.settingsRepo::setSearchTemplate,
             onBlock = deps.settingsRepo::setBlockTrackers,
+            onDesktop = deps.settingsRepo::setDesktopSites,
             onKeepOn = deps.settingsRepo::setKeepScreenOn,
             onSerif = { v -> deps.settingsRepo.setReaderStyle(settings.reader.copy(serif = v)) },
             onClearHistory = { scope.launch { deps.repo.clearHistory() } },

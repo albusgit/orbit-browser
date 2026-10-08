@@ -133,9 +133,12 @@ class BrowserController(
     val renderMode: RenderMode
         get() = when {
             readerUrl != null -> RenderMode.READER
-            site.mode == SiteMode.ZOOM -> RenderMode.ZOOM
-            else -> RenderMode.SCROLL
+            else -> RenderMode.forSite(site.mode, desktopSites)
         }
+
+    /** The "Desktop sites" setting: AUTO and READER sites render as their desktop versions. */
+    var desktopSites = false
+        private set
 
     var bezelMode by mutableStateOf(BezelMode.SCROLL)
         private set
@@ -345,7 +348,7 @@ class BrowserController(
 
     // ----------------------------------------------------------------- modes
 
-    /** Picks Reader, Round Scroll or Zoom for this site and remembers it. */
+    /** Picks Mobile (with Reader for articles), Reader, Round fit or Desktop for this site and remembers it. */
     fun setSiteMode(mode: SiteMode) {
         val pageUrl = readerUrl ?: url ?: return
         val key = Suggestions.siteKey(pageUrl) ?: return
@@ -370,7 +373,17 @@ class BrowserController(
         }
     }
 
-    private var lastAppliedRender = RenderMode.SCROLL
+    private var lastAppliedRender = RenderMode.MOBILE
+
+    /** The "Desktop sites" setting; reloads the page on screen to apply it. */
+    fun setDesktopSites(on: Boolean) {
+        if (on == desktopSites) return
+        desktopSites = on
+        appliedSiteKey = null
+        if (readerUrl != null) return // applied when the reader is left
+        applySiteFor(url)
+        if (hasPage) session.reload()
+    }
 
     /** Changes a per-site toggle (images, JavaScript, lite UA, WebGL) and reloads to apply it. */
     fun updateSite(transform: (SiteSettings) -> SiteSettings) {
@@ -483,12 +496,15 @@ class BrowserController(
         site = s
         val settings = session.settings
         settings.allowJavascript = s.javaScript
-        settings.userAgentOverride = if (s.liteUserAgent) UserAgents.LITE else null
         extension.setBlockImages(s.blockImages)
-        val mode = if (s.mode == SiteMode.ZOOM) RenderMode.ZOOM else RenderMode.SCROLL
+        val mode = RenderMode.forSite(s.mode, desktopSites)
         lastAppliedRender = mode
-        // Zoom view: the page's own desktop-width layout, shown whole; pinch or bezel to zoom.
-        settings.viewportMode = if (mode == RenderMode.ZOOM) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+        // Desktop: the site's desktop version (desktop user agent and width), shown whole.
+        // Everything else gets the mobile version; only Round fit restyles it for the circle.
+        val desktop = mode == RenderMode.ZOOM
+        settings.userAgentMode = if (desktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+        settings.userAgentOverride = if (s.liteUserAgent) UserAgents.LITE else null
+        settings.viewportMode = if (desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
         setRoundLayout(mode == RenderMode.SCROLL)
     }
 
@@ -500,7 +516,7 @@ class BrowserController(
     /** Routes bezel detents according to the bezel mode and the render mode. */
     fun onBezel(detents: Int, stepPx: Int, eventTimeMs: Long) {
         when (bezelMode) {
-            BezelMode.SCROLL -> if (readerUrl != null) {
+            BezelMode.SCROLL, BezelMode.CURSOR -> if (readerUrl != null) {
                 extension.reader("turn", detents)
             } else if (scroller.onDetents(detents, stepPx, eventTimeMs)) {
                 host.onEdge()
@@ -532,11 +548,6 @@ class BrowserController(
 
     fun stopScrolling() = scroller.stop()
 
-    fun cycleBezelMode(): BezelMode {
-        setBezel(bezelMode.next())
-        return bezelMode
-    }
-
     fun setBezel(mode: BezelMode) {
         if (linksActive && mode != BezelMode.LINKS) {
             links("linksStop")
@@ -557,6 +568,19 @@ class BrowserController(
     }
 
     fun activateFocusedLink() = links("linksActivate")
+
+    /** Cursor mode: clicks the page at ([x], [y]) in view pixels. */
+    fun clickAt(x: Float, y: Float) = scroller.tap(x, y)
+
+    /** Cursor mode: scrolls by [dy] px when the cursor is pushed past the top or bottom. */
+    fun scrollByPx(dy: Float) {
+        if (readerUrl == null) scroller.scrollBy(dy)
+    }
+
+    /** Clears a text selection a long press may have started (before the ring opens over it). */
+    fun clearSelection() {
+        if (readerUrl == null) extension.page("clearSelection")
+    }
 
     /** Link focus commands go to bridge.js on web pages and to the reader page in Reader. */
     private fun links(name: String, arg: Any? = null) {
@@ -851,7 +875,7 @@ class BrowserController(
         blockedCount = 0
         focusedLink = null
         linksActive = false
-        bezelMode = if (reading == null && site.mode == SiteMode.ZOOM) BezelMode.ZOOM else BezelMode.SCROLL
+        bezelMode = BezelMode.SCROLL
         pendingExtract = null
         scroller.stop()
         refreshNav()

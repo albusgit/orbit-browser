@@ -9,7 +9,7 @@ import org.mozilla.geckoview.ScreenLength
 import kotlin.math.sign
 
 /**
- * Bezel scrolling and zooming for a GeckoView page, through Gecko's own async pan/zoom (APZ):
+ * Bezel scrolling and zooming, and cursor clicks, for a GeckoView page, through Gecko's own async pan/zoom (APZ):
  * each detent asks for a smooth scroll of one step, and APZ chains the animations, so a click
  * during a scroll extends it. A fast spin becomes one long smooth scroll.
  *
@@ -40,44 +40,66 @@ class GeckoScroller(private val panZoom: () -> PanZoomController?) {
 
     fun stop() = momentum.reset()
 
+    /** Scrolls by [dy] screen pixels at once (the cursor pushed past the edge of the circle). */
+    fun scrollBy(dy: Float) {
+        panZoom()?.scrollBy(ScreenLength.zero(), ScreenLength.fromPixels(dy.toDouble()), PanZoomController.SCROLL_BEHAVIOR_AUTO)
+    }
+
     /**
      * Zooms by [factor] around the centre of [view] with a short synthetic two-finger pinch:
      * GeckoView has no zoom call, but APZ handles a pinch like any other.
      */
     fun zoom(view: View, factor: Float) {
-        val pzc = panZoom() ?: return
         val cx = view.width / 2f
         val cy = view.height / 2f
         val from = view.width * PINCH_START
         val to = (from * factor).coerceIn(view.width * 0.04f, view.width * 0.9f)
-        val down = SystemClock.uptimeMillis()
-        var t = down
-        fun send(action: Int, pointers: Int, span: Float) {
-            val props = Array(pointers) { i ->
+        val second = 1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT
+        Touches(panZoom() ?: return).apply {
+            send(MotionEvent.ACTION_DOWN, cy, cx - from / 2)
+            send(MotionEvent.ACTION_POINTER_DOWN or second, cy, cx - from / 2, cx + from / 2)
+            for (i in 1..PINCH_STEPS) {
+                val span = from + (to - from) * i / PINCH_STEPS
+                send(MotionEvent.ACTION_MOVE, cy, cx - span / 2, cx + span / 2)
+            }
+            send(MotionEvent.ACTION_POINTER_UP or second, cy, cx - to / 2, cx + to / 2)
+            send(MotionEvent.ACTION_UP, cy, cx - to / 2)
+        }
+    }
+
+    /** A synthetic one-finger tap at ([x], [y]) in view pixels: Gecko clicks whatever is there. */
+    fun tap(x: Float, y: Float) {
+        Touches(panZoom() ?: return).apply {
+            send(MotionEvent.ACTION_DOWN, y, x)
+            send(MotionEvent.ACTION_UP, y, x)
+        }
+    }
+
+    /** One synthetic gesture: fingers at [xs] on the row [y], a frame apart per event. */
+    private class Touches(private val pzc: PanZoomController) {
+        private val down = SystemClock.uptimeMillis()
+        private var t = down
+
+        fun send(action: Int, y: Float, vararg xs: Float) {
+            val props = Array(xs.size) { i ->
                 MotionEvent.PointerProperties().apply {
                     id = i
                     toolType = MotionEvent.TOOL_TYPE_FINGER
                 }
             }
-            val coords = Array(pointers) { i ->
+            val coords = Array(xs.size) { i ->
                 MotionEvent.PointerCoords().apply {
-                    x = cx + if (i == 0) -span / 2 else span / 2
-                    y = cy
+                    x = xs[i]
+                    this.y = y
                     pressure = 1f
                     size = 1f
                 }
             }
-            val ev = MotionEvent.obtain(down, t, action, pointers, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+            val ev = MotionEvent.obtain(down, t, action, xs.size, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
             pzc.onTouchEvent(ev)
             ev.recycle()
             t += FRAME_MS
         }
-        val second = 1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT
-        send(MotionEvent.ACTION_DOWN, 1, from)
-        send(MotionEvent.ACTION_POINTER_DOWN or second, 2, from)
-        for (i in 1..PINCH_STEPS) send(MotionEvent.ACTION_MOVE, 2, from + (to - from) * i / PINCH_STEPS)
-        send(MotionEvent.ACTION_POINTER_UP or second, 2, to)
-        send(MotionEvent.ACTION_UP, 1, to)
     }
 
     private companion object {

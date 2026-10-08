@@ -115,7 +115,7 @@ class OrbitExtension {
         send(JSONObject().put("cmd", "inject").put("what", what).put("force", force))
     }
 
-    /** A command for bridge.js in the page: linksStep, linksStop, linksActivate, scrollToFraction. */
+    /** A command for bridge.js in the page: linksStep, linksStop, linksActivate, scrollToFraction, clearSelection. */
     fun page(name: String, arg: Any? = null) {
         send(JSONObject().put("cmd", "page").put("name", name).put("arg", arg ?: JSONObject.NULL))
     }

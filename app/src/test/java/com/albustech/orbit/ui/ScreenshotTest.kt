@@ -144,7 +144,7 @@ abstract class ScreenshotTest(private val tag: String) {
     fun pageChrome() = shot("page") { g ->
         Box(Modifier.fillMaxSize()) {
             FakePage(g)
-            BezelModeArc(g, listOf("Pages", "Links", "Text"), selected = 0, visible = true, onSelect = {})
+            BezelModeArc(g, listOf("Pages", "Links", "Cursor", "Text"), selected = 0, visible = true, onSelect = {})
             EdgeOverlay(g, loadingProgress = { null }, indicator = { EdgeIndicator.Pages(3, 12) }, indicatorVisible = true)
         }
     }

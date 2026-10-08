@@ -36,6 +36,12 @@
       case 'linksStep': if (links) links.step(m.arg < 0 ? -1 : 1); break;
       case 'linksStop': if (links) links.stop(); break;
       case 'linksActivate': if (links) links.activate(); break;
+      case 'clearSelection': {
+        // A hold that opened Orbit's ring may have selected a word under the finger.
+        var sel = window.getSelection && window.getSelection();
+        if (sel) sel.removeAllRanges();
+        break;
+      }
       case 'scrollToFraction': {
         var f = Math.max(0, Math.min(1, Number(m.arg) || 0));
         window.scrollTo(0, f * maxScroll());
