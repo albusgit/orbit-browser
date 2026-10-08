@@ -35,7 +35,7 @@ androidx-compose-foundation = { module = "androidx.compose.foundation:foundation
 androidx-compose-animation = { module = "androidx.compose.animation:animation" }
 androidx-wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", version.ref = "wearCompose" }
 androidx-wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "wearCompose" }
-geckoview = { module = "org.mozilla.geckoview:geckoview-arm64-v8a", version.ref = "geckoview" }
+geckoview = { module = "org.mozilla.geckoview:geckoview-armeabi-v7a", version.ref = "geckoview" }
 androidx-wear-input = { module = "androidx.wear:wear-input", version.ref = "wearInput" }
 androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
