@@ -195,7 +195,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
     val entry = rememberUrlEntry(choices = bookmarks.take(5).map { Suggestions.displayUrl(it.url) }) { open(it) }
     val linkMode = onPage && c.bezelMode == BezelMode.LINKS && overlays.isEmpty()
     val top = overlays.lastOrNull()
-    val listOverlay = top != null && top !is Overlay.Ring && top !is Overlay.More && top !is Overlay.Link && top !is Overlay.TextSize
+    val listOverlay = top != null && top !is Overlay.Ring && top !is Overlay.More && top !is Overlay.TextSize
 
     AppScaffold(
         timeText = {
@@ -204,7 +204,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
-                TitleTimeText(if (onPage && overlays.isEmpty()) host else null)
+                if (onPage && overlays.isEmpty() && host != null) PagePill(host) else TitleTimeText()
             }
         },
     ) {
@@ -299,9 +299,10 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
 
             if (onPage && overlays.isEmpty()) {
                 val modes = BezelMode.entries
-                BezelModeArc(
+                BezelModeBar(
                     geometry = geometry,
                     labels = modes.map { bezelLabel(it, c.renderMode) },
+                    icons = modes.map(::bezelIcon),
                     selected = modes.indexOf(c.bezelMode),
                     visible = chromeVisible,
                     onSelect = { i ->
@@ -488,22 +489,20 @@ private fun OverlayContent(
         )
         is Overlay.Link -> {
             val marked by remember(top.url) { deps.repo.isBookmarked(top.url) }.collectAsState(initial = false)
-            RingMenu(
-                geometry = deps.geometry,
-                title = top.title?.takeIf { it.isNotBlank() } ?: Suggestions.displayUrl(top.url),
-                subtitle = Suggestions.displayUrl(top.url),
-                hint = stringResource(R.string.tap_to_confirm),
-                onDismiss = ::pop,
-                items = listOf(
-                    RingItem(R.drawable.ic_open, stringResource(R.string.action_open)) { close(); c.loadUrl(top.url) },
-                    RingItem(R.drawable.ic_phone, stringResource(R.string.action_phone)) { close(); openOnPhone(top.url) },
-                    RingItem(R.drawable.ic_copy, stringResource(R.string.action_copy)) { deps.actions.copyLink(top.url); close() },
-                    RingItem(
+            OrbitList {
+                header { top.title?.takeIf { it.isNotBlank() } ?: Suggestions.displayUrl(top.url) }
+                note { Suggestions.displayUrl(top.url) }
+                item { MenuButton(R.drawable.ic_open, stringResource(R.string.action_open), { close(); c.loadUrl(top.url) }, primary = true) }
+                item { MenuButton(R.drawable.ic_phone, stringResource(R.string.action_phone), { close(); openOnPhone(top.url) }) }
+                item { MenuButton(R.drawable.ic_copy, stringResource(R.string.action_copy), { deps.actions.copyLink(top.url); close() }) }
+                item {
+                    MenuButton(
                         if (marked) R.drawable.ic_bookmark else R.drawable.ic_bookmark_border,
                         stringResource(if (marked) R.string.action_bookmarked else R.string.action_bookmark),
-                    ) { toggleBookmark(top.url, top.title, marked); close() },
-                ),
-            )
+                        { toggleBookmark(top.url, top.title, marked); close() },
+                    )
+                }
+            }
         }
     }
 }

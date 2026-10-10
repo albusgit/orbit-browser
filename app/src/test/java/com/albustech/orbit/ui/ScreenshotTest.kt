@@ -18,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import com.albustech.orbit.R
+import com.albustech.orbit.browser.BezelMode
 import com.albustech.orbit.browser.SearchSite
 import com.albustech.orbit.browser.SerpData
 import com.albustech.orbit.browser.SerpPage
@@ -44,7 +45,7 @@ abstract class ScreenshotTest(private val tag: String) {
         val density = LocalDensity.current.density
         val px = (cfg.screenWidthDp * density).toInt()
         val geometry = RoundGeometry(px, px, density)
-        MaterialTheme {
+        OrbitTheme {
             Box(Modifier.fillMaxSize().background(Color(0xFF1B1C1E))) {
                 Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.Black)) { content(geometry) }
             }
@@ -109,20 +110,15 @@ abstract class ScreenshotTest(private val tag: String) {
     }
 
     @Test
-    fun linkWedges() = shot("link") { g ->
-        RingMenu(
-            geometry = g,
-            title = "tidal forces",
-            subtitle = "bbc.com/tides",
-            hint = "Tap to confirm",
-            onDismiss = {},
-            items = listOf(
-                RingItem(R.drawable.ic_open, "Open") {},
-                RingItem(R.drawable.ic_phone, "Phone") {},
-                RingItem(R.drawable.ic_copy, "Copy") {},
-                RingItem(R.drawable.ic_bookmark_border, "Bookmark") {},
-            ),
-        )
+    fun linkOptions() = shot("link") { _ ->
+        OrbitList {
+            header { "tidal forces" }
+            note { "bbc.com/tides" }
+            item { MenuButton(R.drawable.ic_open, "Open", {}, primary = true) }
+            item { MenuButton(R.drawable.ic_phone, "Open on phone", {}) }
+            item { MenuButton(R.drawable.ic_copy, "Copy link", {}) }
+            item { MenuButton(R.drawable.ic_bookmark_border, "Bookmark", {}) }
+        }
     }
 
     @Test
@@ -144,7 +140,7 @@ abstract class ScreenshotTest(private val tag: String) {
     fun pageChrome() = shot("page") { g ->
         Box(Modifier.fillMaxSize()) {
             FakePage(g)
-            BezelModeArc(g, listOf("Pages", "Links", "Cursor", "Text"), selected = 0, visible = true, onSelect = {})
+            BezelModeBar(g, listOf("Pages", "Links", "Cursor", "Text"), BezelMode.entries.map(::bezelIcon), selected = 0, visible = true, onSelect = {})
             EdgeOverlay(g, loadingProgress = { null }, indicator = { EdgeIndicator.Pages(3, 12) }, indicatorVisible = true)
         }
     }

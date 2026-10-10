@@ -30,11 +30,11 @@
     <string name="view_scroll">Round fit</string>
     <string name="view_zoom">Desktop</string>
     <string name="bezel_scroll">Scroll</string>
-    <string name="bezel_pages">Turn pages</string>
+    <string name="bezel_pages">Pages</string>
     <string name="bezel_links">Links</string>
     <string name="bezel_cursor">Cursor</string>
     <string name="bezel_zoom">Zoom</string>
-    <string name="bezel_text">Text size</string>
+    <string name="bezel_text">Text</string>
     <string name="conn_wifi">Wi-Fi</string>
     <string name="conn_cellular">LTE</string>
     <string name="conn_bluetooth">Phone (Bluetooth)</string>
@@ -56,7 +56,7 @@
     <string name="error_engine">Orbit\'s web engine couldn\'t start</string>
     <string name="settings_keep_on">Keep screen on while reading</string>
     <string name="settings_serif">Serif reader font</string>
-    <string name="settings_about">Orbit %1$s · GeckoView © Mozilla, MPL 2.0 · uBlock Origin © Raymond Hill, GPLv3 · Readability © Arc90 / Mozilla, Apache 2.0</string>
+    <string name="settings_about">Orbit %1$s · GeckoView © Mozilla, MPL 2.0 · uBlock Origin © Raymond Hill, GPLv3 · Readability © Arc90 / Mozilla, Apache 2.0 · Geist font, OFL 1.1</string>
     <string name="site_images">Block images</string>
     <string name="site_js">JavaScript</string>
     <string name="site_lite">Lite version</string>

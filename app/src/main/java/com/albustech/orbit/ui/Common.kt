@@ -8,6 +8,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
@@ -42,6 +45,20 @@ fun OrbitList(
     ScreenScaffold(scrollState = state, modifier = modifier.fillMaxSize().background(Color.Black)) { padding ->
         TransformingLazyColumn(state = state, contentPadding = padding, modifier = Modifier.fillMaxSize(), content = content)
     }
+}
+
+/**
+ * Rows soften with distance from the screen centre: they dim toward the edges and the
+ * outermost (about three rows from focus) also blur, so the row in the middle reads as focused.
+ * Headers stay sharp.
+ */
+fun Modifier.focusFade(item: TransformingLazyColumnItemScope): Modifier = graphicsLayer {
+    val p = with(item) { scrollProgress }
+    if (p.isUnspecified) return@graphicsLayer
+    val off = kotlin.math.abs((p.topOffsetFraction + p.bottomOffsetFraction) - 1f).coerceIn(0f, 1f)
+    alpha = 1f - 0.5f * off
+    val blur = ((off - 0.72f) / 0.28f).coerceIn(0f, 1f) * 2f * density
+    renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Decal) else null
 }
 
 fun TransformingLazyColumnScope.header(text: @Composable () -> String) {
@@ -81,7 +98,7 @@ fun TransformingLazyColumnItemScope.MenuButton(
         icon?.let { { Icon(painterResource(it), contentDescription = null) } }
     val secondaryContent: (@Composable RowScope.() -> Unit)? =
         secondary?.let { { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
-    val mod = modifier.fillMaxWidth().transformedHeight(this, spec)
+    val mod = modifier.focusFade(this).fillMaxWidth().transformedHeight(this, spec)
     if (primary) {
         Button(
             onClick = onClick,
@@ -118,7 +135,7 @@ fun TransformingLazyColumnItemScope.MenuSwitch(
     SwitchButton(
         checked = checked,
         onCheckedChange = onChange,
-        modifier = Modifier.fillMaxWidth().transformedHeight(this, spec),
+        modifier = Modifier.focusFade(this).fillMaxWidth().transformedHeight(this, spec),
         transformation = SurfaceTransformation(spec),
         secondaryLabel = secondary?.let { { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
         label = { Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis) },

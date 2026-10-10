@@ -123,10 +123,10 @@ fun CursorLayer(
             true
         },
     ) {
-        val r = 9f * geometry.density
-        drawCircle(Color.Black.copy(alpha = 0.55f), radius = r + 2f * geometry.density, center = cursor, style = Stroke(5f * geometry.density))
-        drawCircle(Color.White, radius = r, center = cursor, style = Stroke(2.5f * geometry.density))
-        drawCircle(Color.White, radius = 2f * geometry.density, center = cursor)
+        // A soft grey disc with a thin light rim: visible on light and dark pages alike.
+        val r = 11f * geometry.density
+        drawCircle(Color(0xFF3C3C43).copy(alpha = 0.38f), radius = r, center = cursor)
+        drawCircle(Color.White.copy(alpha = 0.85f), radius = r, center = cursor, style = Stroke(1.5f * geometry.density))
     }
 }
 

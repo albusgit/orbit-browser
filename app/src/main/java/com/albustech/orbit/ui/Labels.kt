@@ -38,3 +38,10 @@ fun bezelLabel(b: BezelMode, render: RenderMode): String = stringResource(
         BezelMode.ZOOM -> if (render == RenderMode.READER) R.string.bezel_text else R.string.bezel_zoom
     },
 )
+
+fun bezelIcon(b: BezelMode): Int = when (b) {
+    BezelMode.SCROLL -> R.drawable.ic_mode_scroll
+    BezelMode.LINKS -> R.drawable.ic_mode_links
+    BezelMode.CURSOR -> R.drawable.ic_mode_cursor
+    BezelMode.ZOOM -> R.drawable.ic_mode_zoom
+}

@@ -61,16 +61,20 @@ checked live.
 
 ### Round-native controls
 
+The look: black, one blue accent (`#0a84ff`), quiet greys and the Geist font, all set once in
+`ui/Theme.kt`. Floating chrome (the top pill, the mode bar, counters) is dark glass that reads on
+any page. Lists follow the circle, and rows dim and blur as they move away from the centre.
+
 - **Launcher** (the home screen):
   - The mic fills the centre.
   - Up to six actions orbit it: keyboard, continue reading, three bookmarks (as letter avatars), and More.
   - The bezel moves a highlight ring around them, and the highlighted name curves along the bottom edge.
-- **On a page**, a **tap** (anywhere that isn't a link) brings back the chrome: the time, the site and the bezel-mode arc. A **hold** opens the ring menu.
-- **Ring menu.** Hold anywhere on a page to open it. Eight wedges: Search, Forward, Reload, Bookmark, Tabs, History, More, Back.
-  - The bezel moves the highlight and a centre tap confirms; you can also tap a wedge directly.
+- **On a page**, a **tap** (anywhere that isn't a link) brings back the chrome: a pill with the time and the site at the top, and the bezel-mode bar at the bottom. A **hold** opens the ring menu.
+- **Ring menu.** Hold anywhere on a page to open it. Eight round buttons over the dimmed page: Search, Forward, Reload, Bookmark, Tabs, History, More, Back.
+  - The bezel moves the highlight and a centre tap confirms; you can also tap a button directly.
   - Unavailable items are dimmed, never removed, so positions stay put.
   - **More** is a second ring: View, Text size, This site, Open on phone, Bookmarks, Settings, Home, Close. Its centre shows the connection and the blocked count.
-- **Link wedges.** Long-press a link (or use *Hold for options* in link mode): Open at the top, Phone on the right, Copy at the bottom, Bookmark on the left.
+- **Link options.** Long-press a link (or use *Hold for options* in link mode): a short list with Open, Open on phone, Copy link and Bookmark.
 - **Lists** (bookmarks, history, tabs, settings) use rows that follow the circle's chord.
 
 ### The bezel
@@ -85,7 +89,7 @@ elsewhere. Tap the page to bring them back, then tap one. Every page starts in *
    - "Link 3 of 9" curves along the top, and a pill at the bottom says **Open link · Hold for options**.
    - Only the pill opens the link. A tap elsewhere just shows the chrome, so nothing opens by accident.
    - Past the last visible link the page scrolls (or turns) and focus continues. Back leaves link mode.
-3. **Cursor**: the screen becomes a trackpad. Drag anywhere to move a small ring cursor (it moves 1.6× the finger, so the finger never hides the target), and **tap to click** under it. Pushing the cursor past the top or bottom of the circle scrolls the page. The bezel still scrolls, a hold still opens the ring, and two fingers still pinch. Moving the cursor brings back the mode arc.
+3. **Cursor**: the screen becomes a trackpad. Drag anywhere to move a soft grey pointer (it moves 1.6× the finger, so the finger never hides the target), and **tap to click** under it. Pushing the cursor past the top or bottom of the circle scrolls the page. The bezel still scrolls, a hold still opens the ring, and two fingers still pinch. Moving the cursor brings back the mode bar.
 4. **Zoom**: zooms the page with the bezel. In Reader it changes the text size and re-paginates on the same word.
 
 Every bezel click gives a haptic tick. The end of a page or article gives a firmer bump.
@@ -209,8 +213,8 @@ app/src/main/
                GeckoScroller            smooth scroll and pinch zoom through Gecko's pan/zoom
                DetentAccumulator, MomentumTracker, Haptics
     ui/        BrowserScreen            root: GeckoView + overlays + curved chrome
-               Launcher, Ring (ring menus + link wedges), SerpScreens, PageChrome
-               (bezel-mode arc, link-mode pill), Avatar, UrlEntryScreen, ListScreens,
+               Launcher, Ring (ring menus), SerpScreens, PageChrome
+               (bezel-mode bar, link-mode pill), Avatar, UrlEntryScreen, ListScreens,
                SettingsScreens, AmbientScreen, EdgeOverlay, Curved, RoundGeometry, Common
     data/      SettingsRepository (SharedPreferences), BrowserRepository + db/ (Room:
                bookmarks, history, per-site settings, reading positions, tabs), Suggestions
@@ -301,8 +305,8 @@ graphics and Roborazzi, at 480 and 432 px, clipped to the circle:
 ./gradlew testDebugUnitTest --tests '*Screenshot4*'   # → app/build/screenshots/<screen>_<size>.png
 ```
 
-It covers the launcher, the ring menu, link wedges, a result card, the results overview,
-results loading, the page chrome with the bezel-mode arc, and link mode. The images are for
+It covers the launcher, the ring menu, link options, a result card, the results overview,
+results loading, the page chrome with the bezel-mode bar, and link mode. The images are for
 review, not pixel comparison.
 
 ### Headless checks (`tools/round-check`)
@@ -420,4 +424,6 @@ separate program (its signed XPI). Its source for the bundled version is at
 https://github.com/gorhill/uBlock/tree/1.75.0 (see `third_party/ublock/README.md`). Its bundled
 filter lists keep their own licences, such as EasyList's GPLv3 / CC BY-SA 3.0.
 
-The app's About line credits all three.
+Geist © The Geist Project Authors, SIL Open Font License 1.1 (`third_party/geist/OFL.txt`).
+
+The app's About line credits all of them.

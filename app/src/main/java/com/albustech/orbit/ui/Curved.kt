@@ -3,8 +3,22 @@ package com.albustech.orbit.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -14,22 +28,42 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.CurvedLayout
 import androidx.wear.compose.foundation.CurvedModifier
 import androidx.wear.compose.foundation.padding
+import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TimeText
+import androidx.wear.compose.material3.TimeTextDefaults
+import com.albustech.orbit.R
 import androidx.wear.compose.material3.curvedText
-import androidx.wear.compose.material3.timeTextCurvedText
-import androidx.wear.compose.material3.timeTextSeparator
 
-/** Time at the top, with the page title curving along the edge beside it. */
+/** The time at the top, off pages (launcher, lists, menus). */
 @Composable
-fun TitleTimeText(title: String?) {
-    val t = title?.trim()?.takeIf { it.isNotEmpty() }
-    TimeText(maxSweepAngle = if (t != null) 150f else 70f) { time ->
-        if (t != null) {
-            curvedText(t, maxSweepAngle = 100f, overflow = TextOverflow.Ellipsis)
-            timeTextSeparator()
+fun TitleTimeText() {
+    TimeText()
+}
+
+/** On a page: a dark glass pill at the top with the time over a padlock and the site. */
+@Composable
+fun PagePill(host: String) {
+    val colors = MaterialTheme.colorScheme
+    val time = TimeTextDefaults.rememberTimeSource(TimeTextDefaults.timeFormat()).currentTime()
+    Box(Modifier.fillMaxSize().padding(top = 12.dp), contentAlignment = Alignment.TopCenter) {
+        Column(
+            Modifier
+                .widthIn(max = 150.dp)
+                .clip(RoundedCornerShape(50))
+                .background(GlassFill)
+                .border(0.5.dp, GlassEdge, RoundedCornerShape(50))
+                .padding(horizontal = 14.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(time, fontSize = 10.sp, color = colors.onSurfaceVariant, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(R.drawable.ic_lock), contentDescription = null, tint = colors.onSurface, modifier = Modifier.size(9.dp))
+                Spacer(Modifier.width(3.dp))
+                Text(host, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-        timeTextCurvedText(time)
     }
 }
 

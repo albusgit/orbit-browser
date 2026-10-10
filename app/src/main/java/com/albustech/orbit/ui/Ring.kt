@@ -21,9 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalDensity
@@ -104,7 +102,8 @@ data class RingItem(
 )
 
 /**
- * A round-native menu: [items] as wedges on a ring. The bezel moves the highlight one wedge per
+ * A round-native menu: [items] as round buttons on a ring (each wedge of the ring is its
+ * touch target). The bezel moves the highlight one wedge per
  * click (with a tick), the centre names the highlighted action, and a tap anywhere in the centre
  * confirms it. Wedges can also be tapped directly. Disabled actions are dimmed, never hidden,
  * so positions don't shift. Swipe right (or Back) dismisses.
@@ -115,7 +114,6 @@ fun RingMenu(
     items: List<RingItem>,
     subtitle: String?,
     hint: String,
-    title: String? = null,
     onDismiss: () -> Unit,
     startDeg: Float = -90f,
     initial: Int = 0,
@@ -134,7 +132,7 @@ fun RingMenu(
     LaunchedEffect(Unit) { focus.requestFocus() }
 
     val colors = MaterialTheme.colorScheme
-    val wedge = colors.surfaceContainer
+    val button = colors.surfaceContainerHigh
     val accent = colors.primary
 
     fun step(n: Int) {
@@ -163,7 +161,7 @@ fun RingMenu(
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(Color.Black.copy(alpha = 0.86f))
                 .onRotaryScrollEvent {
                     val n = accumulator.add(it.verticalScrollPixels)
                     if (n != 0) step(n)
@@ -186,14 +184,18 @@ fun RingMenu(
                 },
             contentAlignment = Alignment.Center,
         ) {
+            // Round buttons on the ring: the highlighted one larger, in the accent, with a light rim.
+            val r = 26f * density
             Canvas(Modifier.fillMaxSize()) {
-                val c = Offset(geometry.centerXPx, geometry.centerYPx)
                 items.forEachIndexed { i, item ->
-                    val color = when {
-                        i == highlighted -> accent
-                        else -> wedge
+                    val (x, y) = ring.midPoint(i)
+                    val c = Offset(geometry.centerXPx + x, geometry.centerYPx + y)
+                    if (i == highlighted) {
+                        drawCircle(Color.White.copy(alpha = 0.9f), radius = r * 1.2f + 3f * density, center = c)
+                        drawCircle(accent, radius = r * 1.2f, center = c)
+                    } else {
+                        drawCircle(button.copy(alpha = if (item.enabled) 1f else 0.45f), radius = r, center = c)
                     }
-                    drawPath(wedgePath(c, ring, i), color.copy(alpha = if (item.enabled) 1f else 0.5f))
                 }
             }
             items.forEachIndexed { i, item ->
@@ -201,7 +203,7 @@ fun RingMenu(
                 val tint = when {
                     !item.enabled -> colors.onSurface.copy(alpha = 0.3f)
                     i == highlighted -> colors.onPrimary
-                    else -> accent
+                    else -> colors.onSurface
                 }
                 Icon(
                     painterResource(item.icon),
@@ -209,7 +211,7 @@ fun RingMenu(
                     tint = tint,
                     modifier = Modifier
                         .offset(x = (x / density).dp, y = (y / density).dp)
-                        .size(26.dp),
+                        .size(if (i == highlighted) 28.dp else 24.dp),
                 )
             }
             Column(
@@ -227,37 +229,24 @@ fun RingMenu(
                         textAlign = TextAlign.Center,
                     )
                 }
-                // Ring menus name the action; link wedges name the link and show the action below.
                 val action = items.getOrNull(highlighted)?.label.orEmpty()
                 Text(
-                    title ?: action,
-                    style = MaterialTheme.typography.titleMedium,
+                    action,
+                    style = MaterialTheme.typography.titleLarge,
                     color = colors.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                 )
                 Text(
-                    if (title != null) action else hint,
-                    style = if (title != null) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    hint,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                     overflow = TextOverflow.Ellipsis,
-                    color = accent,
+                    color = colors.onSurfaceVariant,
                     maxLines = 1,
                     textAlign = TextAlign.Center,
                 )
             }
         }
-    }
-}
-
-/** An annular sector for wedge [i], with half the gap trimmed from each side. */
-private fun wedgePath(c: Offset, ring: RingGeometry, i: Int): Path {
-    val half = ring.sweep / 2f - ring.gapDeg / 2f
-    val start = ring.centerDeg(i) - half
-    val sweep = half * 2f
-    return Path().apply {
-        arcTo(Rect(c, ring.outer), start, sweep, forceMoveTo = true)
-        arcTo(Rect(c, ring.inner), start + sweep, -sweep, forceMoveTo = false)
-        close()
     }
 }

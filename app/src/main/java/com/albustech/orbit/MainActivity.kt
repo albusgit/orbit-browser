@@ -21,7 +21,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.wear.ambient.AmbientLifecycleObserver
-import androidx.wear.compose.material3.MaterialTheme
+import com.albustech.orbit.ui.OrbitTheme
 import androidx.wear.remote.interactions.RemoteActivityHelper
 import com.albustech.orbit.browser.BrowserController
 import com.albustech.orbit.browser.BrowserHost
@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
             // Gecko's native libraries failed to load (wrong ABI, damaged install).
             Log.e("OrbitGecko", "Engine failed to start", e)
             setContent {
-                MaterialTheme {
+                OrbitTheme {
                     ErrorScreen(geometry, getString(R.string.error_engine), detail = e.javaClass.simpleName, onRetry = ::recreate)
                 }
             }
@@ -130,7 +130,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         val deps = OrbitDeps(browser, input, tabManager, app.repository, app.settings, geometry, connection, this)
         setContent {
             val settings by app.settings.settings.collectAsStateWithLifecycle(initialValue = Settings())
-            MaterialTheme {
+            OrbitTheme {
                 BrowserScreen(deps, settings, ambient)
             }
         }
