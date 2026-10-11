@@ -37,11 +37,12 @@ class QuizStateTest {
     @Test
     fun tapOnASlotLightsItThenAnswers() {
         val s = state()
-        s.tapSlot(2)
+        val right = (0 until 4).first { s.isCorrect(it) }
+        s.tapSlot(right)
         assertFalse(s.answered)
-        s.tapSlot(2)
+        s.tapSlot(right)
         assertTrue(s.answered)
-        assertEquals(2, s.chosen)
+        assertEquals(right, s.chosen)
     }
 
     @Test
@@ -56,15 +57,46 @@ class QuizStateTest {
     }
 
     @Test
-    fun bezelAfterAnAnswerMovesOn() {
+    fun aWrongPickKeepsTheQuestionUntilTheRightOne() {
         val s = state()
-        val wrong = (0 until 4).first { !s.isCorrect(it) }
         val first = s.question
-        s.tapSlot(wrong); s.tapSlot(wrong)
-        assertFalse(s.lastCorrect)
-        s.rotate(1)
+        val wrongs = (0 until 4).filter { !s.isCorrect(it) }
+        s.tapSlot(wrongs[0]); s.tapSlot(wrongs[0])
         assertFalse(s.answered)
-        assertNull(s.highlighted)
+        assertEquals(setOf(wrongs[0]), s.wrong)
+        s.rotate(1) // the bezel does not skip the question
+        assertTrue(first === s.question)
+        s.choose(wrongs[1])
+        assertEquals(0, s.progress.answered)
+        val right = (0 until 4).first { s.isCorrect(it) }
+        s.choose(right)
+        assertTrue(s.answered)
+        // Passed, but not on the first pick: it counts as a miss.
+        assertEquals(1, s.progress.answered)
+        assertEquals(0, s.progress.correct)
+        s.rotate(1)
         assertTrue(first !== s.question)
+        assertTrue(s.wrong.isEmpty())
+    }
+
+    @Test
+    fun bezelSkipsWrongPicks() {
+        val s = state()
+        val wrongs = (0 until 4).filter { !s.isCorrect(it) }
+        wrongs.forEach(s::choose)
+        s.highlighted = null
+        s.rotate(1)
+        assertTrue(s.isCorrect(s.highlighted!!))
+        assertFalse(s.rotate(1)) // only one answer left to light
+    }
+
+    @Test
+    fun tappingAWrongPickAgainDoesNothing() {
+        val s = state()
+        val w = (0 until 4).first { !s.isCorrect(it) }
+        s.choose(w)
+        s.tapSlot(w); s.tapBackground()
+        assertEquals(setOf(w), s.wrong)
+        assertFalse(s.answered)
     }
 }

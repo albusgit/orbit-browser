@@ -50,6 +50,17 @@ abstract class ScreenshotTest(private val tag: String) {
 
     @Test fun wrong() = shot("3_wrong", state().apply { choose((0 until 4).first { !isCorrect(it) }) })
 
+    @Test fun wrongThenLit() = shot("3b_wrong_then_lit", state().apply {
+        val w = (0 until 4).filter { !isCorrect(it) }
+        choose(w[0]); choose(w[1])
+        rotate(1)
+    })
+
+    @Test fun wrongThenRight() = shot("3c_wrong_then_right", state().apply {
+        choose((0 until 4).first { !isCorrect(it) })
+        choose((0 until 4).first { isCorrect(it) })
+    })
+
     @Test fun right() = shot("4_right", state().apply { choose((0 until 4).first { isCorrect(it) }) })
 
     @Test fun longestLit() = shot("5_longest_lit", state(longest).apply {
@@ -61,8 +72,16 @@ abstract class ScreenshotTest(private val tag: String) {
         choose((0 until 4).filter { !isCorrect(it) }.maxBy { answer(it).length })
     })
 
+    @Test fun longestRight() = shot("6b_longest_right", state(longest).apply {
+        choose((0 until 4).filter { !isCorrect(it) }.maxBy { answer(it).length })
+        choose((0 until 4).first { isCorrect(it) })
+    })
+
     @Test fun stats() = shot("7_stats", state().apply {
-        repeat(9) { choose((0 until 4).first { s -> it % 4 != 0 == isCorrect(s) }); next() }
+        repeat(9) {
+            if (it % 4 == 0) choose((0 until 4).first { s -> !isCorrect(s) })
+            choose((0 until 4).first(::isCorrect)); next()
+        }
         showStats = true
     })
 }

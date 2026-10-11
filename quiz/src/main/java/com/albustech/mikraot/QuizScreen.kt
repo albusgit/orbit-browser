@@ -81,9 +81,9 @@ private const val AUTO_NEXT_MS = 900L
  *  - the right edge: four notches showing which answer the bezel is on;
  *  - the bottom cap: what to do next.
  *
- * Bezel: move between answers (a click each). Tap: answer with the lit one. After a wrong
- * answer the right one is shown until the next bezel click or tap; a right answer moves on
- * by itself. Long press: stats.
+ * Bezel: move between answers (a click each), skipping wrong picks. Tap: answer with the lit
+ * one. A wrong pick turns red and you pick again; only the right answer passes the question,
+ * and then it moves on by itself. Long press: stats.
  */
 @Composable
 fun QuizScreen(state: QuizState, onInteract: () -> Unit = {}) {
@@ -102,7 +102,7 @@ fun QuizScreen(state: QuizState, onInteract: () -> Unit = {}) {
             if (state.lastCorrect) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.REJECT,
         )
         flash.snapTo(1f)
-        flash.animateTo(0.35f, tween(600))
+        flash.animateTo(if (state.lastCorrect) 0.35f else 0f, tween(600))
         if (state.lastCorrect) {
             delay(AUTO_NEXT_MS - 600)
             if (state.answered) state.next()
@@ -133,9 +133,9 @@ fun QuizScreen(state: QuizState, onInteract: () -> Unit = {}) {
         ) {
             val d = minOf(maxWidth, maxHeight)
             val verdict = when {
-                !state.answered -> null
-                state.lastCorrect -> RightRim
-                else -> WrongRim
+                state.answered -> RightRim
+                state.wrong.isNotEmpty() -> WrongRim
+                else -> null
             }
             Rim(d, state, verdict, flash.value)
             Header(d, state)
@@ -162,7 +162,7 @@ private fun Rim(d: Dp, state: QuizState, verdict: Color?, flash: Float) {
             val center = (slot - 1.5f) * NOTCH_STEP
             val color = when {
                 state.answered && state.isCorrect(slot) -> RightRim
-                state.answered && state.chosen == slot -> WrongRim
+                slot in state.wrong -> WrongRim
                 state.highlighted == slot -> Accent
                 else -> Color(0xFF3C4043)
             }
@@ -192,14 +192,15 @@ private fun Header(d: Dp, state: QuizState) {
 @Composable
 private fun Footer(d: Dp, state: QuizState) {
     val text = when {
-        state.answered && !state.lastCorrect -> "הקש להמשך"
         state.answered -> "נכון!"
+        state.wrong.isNotEmpty() -> "לא נכון · נסה שוב"
         state.highlighted != null -> "הקש לאישור"
         else -> "סובב את הבזל"
     }
     val color = when {
-        state.answered && state.lastCorrect -> RightRim
-        state.highlighted != null && !state.answered -> Accent
+        state.answered -> RightRim
+        state.wrong.isNotEmpty() -> WrongRim
+        state.highlighted != null -> Accent
         else -> Muted
     }
     CapText(text, Modifier.fillMaxWidth().offset(y = d * 0.885f), color)
@@ -248,10 +249,10 @@ private fun Body(d: Dp, state: QuizState, onInteract: () -> Unit) {
                 constraints = Constraints(maxWidth = w),
             ).size.height
             val scale = SCALES.firstOrNull { s ->
-                // Worst case: after a wrong answer two pills are open (the chosen and the right one).
+                // Worst case: the longest answer is open (lit, or right).
                 val closed = q.answers.map { h(it, ANSWER_SP * s, false, rowW, 1) }
                 val open = q.answers.map { h(it, ANSWER_SP * s, true, rowW - (MarkSize * 1.5f + 2.dp).roundToPx(), OPEN_LINES) }
-                val growth = q.answers.indices.map { open[it] - closed[it] }.sortedDescending().take(2).sum()
+                val growth = q.answers.indices.map { open[it] - closed[it] }.max()
                 val total = h(q.text, QUESTION_SP * s, true, textW, Int.MAX_VALUE) + QuestionGap.roundToPx() +
                     closed.sum() + growth + (RowPadV * 2 * 4 + RowGap * 3).roundToPx()
                 total <= height.roundToPx()
@@ -288,8 +289,8 @@ private fun Body(d: Dp, state: QuizState, onInteract: () -> Unit) {
 private fun AnswerPill(state: QuizState, slot: Int, fit: Fit, onInteract: () -> Unit) {
     val lit = state.highlighted == slot
     val right = state.answered && state.isCorrect(slot)
-    val wrong = state.answered && state.chosen == slot && !right
-    val open = lit || right || wrong
+    val wrong = slot in state.wrong
+    val open = lit || right
     val background = when {
         right -> Right
         wrong -> Wrong
@@ -300,9 +301,9 @@ private fun AnswerPill(state: QuizState, slot: Int, fit: Fit, onInteract: () -> 
     Box(
         Modifier
             .fillMaxWidth()
-            .alpha(if (state.answered && !open) 0.4f else 1f)
+            .alpha(if (state.answered && !open && !wrong) 0.4f else 1f)
             .background(background, shape)
-            .then(if (lit && !state.answered) Modifier.border(2.dp, Accent, shape) else Modifier)
+            .then(if (lit && !state.answered && !wrong) Modifier.border(2.dp, Accent, shape) else Modifier)
             .pointerInput(state, slot) {
                 detectTapGestures(
                     onTap = { onInteract(); state.tapSlot(slot) },

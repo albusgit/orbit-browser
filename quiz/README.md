@@ -6,7 +6,7 @@ An endless multiple-choice quiz for the round watch, made to practise the first 
 
 ## How it fits the circle
 
-![Screens at 480 px: answer lit, wrong, right, longest question, stats](screens.png)
+![Screens at 480 px: answer lit, wrong pick, two wrong picks and the bezel on the last answer, right after a miss, a long question](screens.png)
 
 ```
          ╭──────── 37/103 · רצף 4 ────────╮     top cap: mastered / total, streak
@@ -21,19 +21,21 @@ An endless multiple-choice quiz for the round watch, made to practise the first 
 - **Bezel**: one click moves to the next answer (wraps around). After answering, a click
   moves to the next question.
 - **Tap**: confirms the lit answer. Tapping a pill lights it; tapping it again answers.
-- **Right**: green rim and pill, a confirm buzz, and the next question after a moment.
-- **Wrong**: your pick turns red and the right answer green. It stays until you tap or turn,
-  so you can read it.
+- **Wrong**: your pick turns red with an ✗ and a buzz, and you pick again. The right answer is
+  not revealed, and the bezel skips the answers already marked wrong.
+- **Right**: the pill turns green with a ✓, and the next question comes after a moment (or
+  at once with a tap or a bezel click). Only the right answer passes a question.
 - **Long press**: stats (mastered, accuracy, best streak) and a two-tap reset.
 
 Text is sized once per question so that the worst case still fits: the question plus all four
-answers with two of them open (yours and the right one). Long questions get smaller text
+answers with the longest one open. Long questions get smaller text
 instead of being cut off.
 
 ## Learning loop
 
-Each round asks every question once, with the ones not yet mastered first. A miss returns
-after three other questions. Two right answers in a row mark a question as mastered. Progress
+Each round asks every question once, with the ones not yet mastered first. A question
+counts as right only if the first pick was right; otherwise it returns after three other
+questions. Two right answers in a row mark a question as mastered. Progress
 is saved after every answer.
 
 ## Questions
