@@ -81,10 +81,10 @@ interface BrowserHost {
  * state to Compose. Runs on the main thread.
  *
  * Pages are reached through the Orbit extension ([OrbitExtension], assets/extensions/orbit): it
- * runs the round layout at document start, injects Readability / serp.js / links.js on request
+ * runs the Compact view at document start, injects Readability / serp.js / links.js on request
  * and relays their messages.
  *
- * Reader flow: a page loads in Round Scroll; if its site is AUTO or READER, extract.js runs
+ * Reader flow: a page loads (Mobile, Compact or Desktop); if its site is AUTO or READER, extract.js runs
  * Readability and posts the article back; the app sanitises it again and hands it to the
  * extension, then loads the extension's reader page (moz-extension://…/reader.html#u=article).
  * History becomes [… A, A-reader]; Back from the reader skips A (which would only re-open it).
@@ -110,6 +110,10 @@ class BrowserController(
         private set
     var isLoading by mutableStateOf(false)
         private set
+
+    /** A new page is loading and hasn't painted yet: the UI covers the old one (and any results page). */
+    var awaitingPaint by mutableStateOf(false)
+        private set
     var canGoBack by mutableStateOf(false)
         private set
     var canGoForward by mutableStateOf(false)
@@ -133,11 +137,11 @@ class BrowserController(
     val renderMode: RenderMode
         get() = when {
             readerUrl != null -> RenderMode.READER
-            else -> RenderMode.forSite(site.mode, desktopSites)
+            else -> RenderMode.forSite(site.mode, defaultView)
         }
 
-    /** The "Desktop sites" setting: AUTO and READER sites render as their desktop versions. */
-    var desktopSites = false
+    /** The global View setting (Mobile, Compact or Desktop), for sites left on Auto. */
+    var defaultView = RenderMode.MOBILE
         private set
 
     var bezelMode by mutableStateOf(BezelMode.SCROLL)
@@ -199,7 +203,7 @@ class BrowserController(
     /** False until this reader page says 'ready': earlier 'page' events are its initial layout. */
     private var readerReady = false
 
-    /** Results pages are loaded without images or round layout; restore the site's settings after. */
+    /** Results pages are loaded without images or Compact view; restore the site's settings after. */
     private var serpOverride = false
     private var serpRetried = false
     /** Results pages whose extraction failed (CAPTCHA, consent): shown as ordinary pages from then on. */
@@ -271,6 +275,7 @@ class BrowserController(
         error = null
         hasPage = true
         url = target
+        awaitingPaint = true
         prepareFor(target)
         session.loadUri(target)
     }
@@ -375,10 +380,10 @@ class BrowserController(
 
     private var lastAppliedRender = RenderMode.MOBILE
 
-    /** The "Desktop sites" setting; reloads the page on screen to apply it. */
-    fun setDesktopSites(on: Boolean) {
-        if (on == desktopSites) return
-        desktopSites = on
+    /** The global View setting; reloads the page on screen to apply it. */
+    fun setDefaultView(view: RenderMode) {
+        if (view == defaultView) return
+        defaultView = view
         appliedSiteKey = null
         if (readerUrl != null) return // applied when the reader is left
         applySiteFor(url)
@@ -443,9 +448,9 @@ class BrowserController(
         }
         serpOverride = true
         if (serp?.let { key(it.url) } != key(target)) serp = SerpState.Loading(page, target)
-        // Never shown as a page: skip its images and the round layout.
+        // Never shown as a page: skip its images and the Compact view.
         extension.setBlockImages(true)
-        setRoundLayout(false)
+        extension.setCompact(false)
     }
 
     fun serpIndexFor(pageUrl: String): Int = serpIndex[key(pageUrl)] ?: 0
@@ -497,19 +502,16 @@ class BrowserController(
         val settings = session.settings
         settings.allowJavascript = s.javaScript
         extension.setBlockImages(s.blockImages)
-        val mode = RenderMode.forSite(s.mode, desktopSites)
+        val mode = RenderMode.forSite(s.mode, defaultView)
         lastAppliedRender = mode
         // Desktop: the site's desktop version (desktop user agent and width), shown whole.
-        // Everything else gets the mobile version; only Round fit restyles it for the circle.
+        // Everything else gets the mobile version; Compact lays it out at a phone's width.
         val desktop = mode == RenderMode.ZOOM
         settings.userAgentMode = if (desktop) GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
         settings.userAgentOverride = if (s.liteUserAgent) UserAgents.LITE else null
         settings.viewportMode = if (desktop) GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
-        setRoundLayout(mode == RenderMode.SCROLL)
+        extension.setCompact(mode == RenderMode.COMPACT)
     }
-
-    private fun setRoundLayout(on: Boolean) =
-        extension.setRoundLayout(on, geometry.diameterCss, geometry.squareCss, geometry.insetCss)
 
     // ----------------------------------------------------------------- bezel
 
@@ -572,9 +574,9 @@ class BrowserController(
     /** Cursor mode: clicks the page at ([x], [y]) in view pixels. */
     fun clickAt(x: Float, y: Float) = scroller.tap(x, y)
 
-    /** Cursor mode: scrolls by [dy] px when the cursor is pushed past the top or bottom. */
-    fun scrollByPx(dy: Float) {
-        if (readerUrl == null) scroller.scrollBy(dy)
+    /** Cursor mode: the finger dragged by ([dx], [dy]) px; the page follows it under the cursor. */
+    fun panBy(dx: Float, dy: Float) {
+        if (readerUrl == null) scroller.scrollBy(-dx, -dy)
     }
 
     /** Clears a text selection a long press may have started (before the ring opens over it). */
@@ -866,6 +868,7 @@ class BrowserController(
             session.settings.allowJavascript = true
         }
         isLoading = true
+        awaitingPaint = true
         progress = 0
         error = null
         url = reading ?: pageUrl
@@ -884,6 +887,7 @@ class BrowserController(
 
     private fun onStopped(success: Boolean) {
         isLoading = false
+        awaitingPaint = false
         progress = 100
         main.removeCallbacks(watchdog)
         val pageUrl = url
@@ -981,6 +985,7 @@ class BrowserController(
             error = PageError(uri ?: url.orEmpty(), kind, PageError.detailFor(err.code), conn)
             serp = null
             isLoading = false
+            awaitingPaint = false
             main.removeCallbacks(watchdog)
             return null // Orbit draws its own error screen over Gecko's page
         }
@@ -1009,6 +1014,7 @@ class BrowserController(
         }
 
         override fun onFirstContentfulPaint(session: GeckoSession) {
+            awaitingPaint = false
             // Results pages are read as soon as they paint, not when every last resource is in.
             if (serp is SerpState.Loading) extension.inject("serp")
         }

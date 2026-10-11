@@ -6,7 +6,11 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /** What the user picked for a site. AUTO = Reader when the page is an article, else Round Scroll. */
-enum class SiteMode { AUTO, READER, SCROLL, ZOOM }
+/**
+ * A site's View choice. AUTO follows the global View setting (and opens articles in Reader);
+ * SCROLL is Compact and ZOOM is Desktop (names kept: they are stored). Appended values only.
+ */
+enum class SiteMode { AUTO, READER, SCROLL, ZOOM, MOBILE }
 
 @Entity(tableName = "bookmarks")
 data class Bookmark(

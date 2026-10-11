@@ -49,6 +49,11 @@ object OrbitRuntime {
             .webManifest(false)
             .doubleTapZoomingEnabled(true)
             .inputAutoZoomEnabled(false)
+            // A 2 GB watch: one content process for all sites (no site isolation), extensions in
+            // the main process, and Gecko frees caches when Android says memory is low.
+            .fissionEnabled(false)
+            .extensionsProcessEnabled(false)
+            .lowMemoryDetection(true)
             .contentBlocking(
                 ContentBlocking.Settings.Builder()
                     // No Safe Browsing lookups; Firefox's own tracker protection stays at standard.

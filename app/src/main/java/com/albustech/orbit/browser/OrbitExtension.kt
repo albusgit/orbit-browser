@@ -24,7 +24,7 @@ interface PageListener {
  * The app's end of the Orbit extension: one native port ("orbit") to its background script,
  * which relays to pages (see assets/extensions/orbit/background.js).
  *
- * Commands sent before the port is up are queued. The round-layout, WebGL and image settings are
+ * Commands sent before the port is up are queued. The Compact view, WebGL and image settings are
  * also re-sent whenever the background script (re)connects, so they survive its restarts.
  *
  * Messages are hints from page context, never commands: the controller checks each one against
@@ -95,10 +95,9 @@ class OrbitExtension {
 
     // ----------------------------------------------------------- commands
 
-    /** Round Scroll layout for upcoming pages, or off (Zoom view, search results). */
-    fun setRoundLayout(on: Boolean, d: Float, sq: Float, inset: Float) {
-        val geometry = JSONObject().put("d", d.toDouble()).put("sq", sq.toDouble()).put("inset", inset.toDouble())
-        send(JSONObject().put("cmd", "round").put("on", on).put("geometry", geometry), sticky = true)
+    /** Compact view (phone-width layout) for upcoming pages, or off. */
+    fun setCompact(on: Boolean) {
+        send(JSONObject().put("cmd", "compact").put("on", on), sticky = true)
     }
 
     /** WebGL stays refused everywhere except [allowed] sites (and their subdomains). */

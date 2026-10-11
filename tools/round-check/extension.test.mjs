@@ -44,7 +44,7 @@ function fakeBrowser() {
 
 function loadBackground() {
   const browser = fakeBrowser();
-  const ctx = { browser, module: { exports: {} }, setTimeout, fetch: async () => ({ text: async () => '.round{}' }), console };
+  const ctx = { browser, module: { exports: {} }, setTimeout, console };
   vm.createContext(ctx);
   vm.runInContext(source('background.js'), ctx);
   return { browser, bg: ctx.module.exports };
@@ -71,16 +71,15 @@ test('WebGL guard is on everywhere until the app lists sites, then excludes them
   assert.equal(browser.log.unregistered, 1);
 });
 
-test('round layout registers geometry + round.js at document start, and turns off', async () => {
+test('compact view registers compact.js at document start in the main frame, and turns off', async () => {
   const { browser, bg } = loadBackground();
-  await bg.onAppMessage({ cmd: 'round', on: true, geometry: { d: 240, sq: 169.7, inset: 35.1 } });
+  await bg.onAppMessage({ cmd: 'compact', on: true });
   const reg = browser.log.registered.at(-1);
-  assert.match(reg.js[0].code, /window.__orbit=\{"d":240,"sq":169.7,"inset":35.1\}/);
-  assert.match(reg.js[0].code, /window.__orbitCss=".round\{\}"/);
-  assert.equal(reg.js[1].file, 'round.js');
+  assert.equal(reg.js[0].file, 'compact.js');
   assert.equal(reg.runAt, 'document_start');
+  assert.equal(reg.allFrames, false);
   const before = browser.log.unregistered;
-  await bg.onAppMessage({ cmd: 'round', on: false });
+  await bg.onAppMessage({ cmd: 'compact', on: false });
   assert.equal(browser.log.unregistered, before + 1);
 });
 

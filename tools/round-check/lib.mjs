@@ -19,7 +19,8 @@ export function geometry(px, density) {
 }
 
 /**
- * background.js setRound: the geometry prefix + round.js. On the watch it is registered for web
+ * The Round fit layout (round.js, no longer used by the app; kept as the harness for the reader and link checks):
+ * the geometry prefix + round.js. On the watch it is registered for web
  * pages only, so it never runs on the reader (an extension page); the checks serve their reader
  * stand-in at #orbit-reader, which is skipped here to match.
  */

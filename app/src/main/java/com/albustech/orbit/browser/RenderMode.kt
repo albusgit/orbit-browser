@@ -10,19 +10,23 @@ enum class RenderMode {
     /** The site's own mobile version, as a phone would show it. The default. */
     MOBILE,
 
-    /** Opt-in "Round fit": the content column capped to the inscribed square. */
-    SCROLL,
+    /** The mobile version laid out at a phone's width (360 CSS px) and scaled to fit. */
+    COMPACT,
 
     /** The site's desktop version, shown whole; pinch or bezel to zoom. */
     ZOOM,
     ;
 
     companion object {
-        /** How a page renders for a site's View choice, given the global Desktop sites setting. */
-        fun forSite(mode: SiteMode, desktopSites: Boolean): RenderMode = when (mode) {
-            SiteMode.SCROLL -> SCROLL
+        /** The three choices of the global View setting. */
+        val VIEWS = listOf(MOBILE, COMPACT, ZOOM)
+
+        /** How a page renders for a site's View choice, given the global View setting. */
+        fun forSite(mode: SiteMode, default: RenderMode): RenderMode = when (mode) {
+            SiteMode.MOBILE -> MOBILE
+            SiteMode.SCROLL -> COMPACT
             SiteMode.ZOOM -> ZOOM
-            SiteMode.AUTO, SiteMode.READER -> if (desktopSites) ZOOM else MOBILE
+            SiteMode.AUTO, SiteMode.READER -> default
         }
     }
 }

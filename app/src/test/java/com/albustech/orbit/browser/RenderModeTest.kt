@@ -7,22 +7,19 @@ import org.junit.Test
 class RenderModeTest {
 
     @Test
-    fun `sites get their mobile version by default`() {
-        assertEquals(RenderMode.MOBILE, RenderMode.forSite(SiteMode.AUTO, desktopSites = false))
-        assertEquals(RenderMode.MOBILE, RenderMode.forSite(SiteMode.READER, desktopSites = false))
-    }
-
-    @Test
-    fun `the Desktop sites setting switches the default`() {
-        assertEquals(RenderMode.ZOOM, RenderMode.forSite(SiteMode.AUTO, desktopSites = true))
-        assertEquals(RenderMode.ZOOM, RenderMode.forSite(SiteMode.READER, desktopSites = true))
+    fun `sites on Auto follow the global View setting`() {
+        for (view in RenderMode.VIEWS) {
+            assertEquals(view, RenderMode.forSite(SiteMode.AUTO, view))
+            assertEquals(view, RenderMode.forSite(SiteMode.READER, view))
+        }
     }
 
     @Test
     fun `a site's own choice wins over the setting`() {
-        for (desktop in listOf(false, true)) {
-            assertEquals(RenderMode.SCROLL, RenderMode.forSite(SiteMode.SCROLL, desktop))
-            assertEquals(RenderMode.ZOOM, RenderMode.forSite(SiteMode.ZOOM, desktop))
+        for (view in RenderMode.VIEWS) {
+            assertEquals(RenderMode.MOBILE, RenderMode.forSite(SiteMode.MOBILE, view))
+            assertEquals(RenderMode.COMPACT, RenderMode.forSite(SiteMode.SCROLL, view))
+            assertEquals(RenderMode.ZOOM, RenderMode.forSite(SiteMode.ZOOM, view))
         }
     }
 }

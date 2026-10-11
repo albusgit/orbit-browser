@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -21,6 +23,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.Button
+import androidx.wear.compose.material3.CircularProgressIndicator
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
@@ -131,6 +136,61 @@ fun BoxScope.LinkModeControls(
         secondaryLabel = { Text(androidx.compose.ui.res.stringResource(R.string.hold_for_options), maxLines = 1, overflow = TextOverflow.Ellipsis) },
         label = { Text(androidx.compose.ui.res.stringResource(R.string.open_link), maxLines = 1) },
     )
+}
+
+/**
+ * Shown from the moment a page starts loading until it first paints: a spinner and the site,
+ * over black. It also hides the page being left (a results page when a result is opened).
+ */
+@Composable
+fun LoadingCover(host: String?) {
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        CircularProgressIndicator(Modifier.size(56.dp), strokeWidth = 4.dp)
+        if (host != null) {
+            Text(
+                host,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.align(Alignment.Center).offset(y = 52.dp).padding(horizontal = 40.dp),
+            )
+        }
+    }
+}
+
+/**
+ * A thin strip along the bottom edge: pulling up from it calls [onPull] (the bezel-mode bar).
+ * A short handle shows there while the chrome is up, as a hint.
+ */
+@Composable
+fun BoxScope.PullUpZone(showHandle: Boolean, onPull: () -> Unit) {
+    val pull by rememberUpdatedState(onPull)
+    Box(
+        Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth(0.6f)
+            .height(36.dp)
+            .pointerInput(Unit) {
+                var dragged = 0f
+                detectVerticalDragGestures(
+                    onDragStart = { dragged = 0f },
+                    onVerticalDrag = { change, dy ->
+                        change.consume()
+                        dragged += dy
+                        if (dragged < -18.dp.toPx()) {
+                            dragged = Float.NEGATIVE_INFINITY // once per pull
+                            pull()
+                        }
+                    },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        AnimatedVisibility(showHandle, enter = fadeIn(), exit = fadeOut()) {
+            Box(Modifier.size(width = 30.dp, height = 4.dp).clip(RoundedCornerShape(50)).background(Color.White.copy(alpha = 0.55f)))
+        }
+    }
 }
 
 /** Transparent layer that turns any tap into "show the chrome" and a hold into the ring. */

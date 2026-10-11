@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
                 browser.searchTemplate = s.searchTemplate
                 browser.readerStyle = s.reader
                 browser.setBlocking(s.blockTrackers)
-                browser.setDesktopSites(s.desktopSites)
+                browser.setDefaultView(s.defaultView)
                 runtime.settings.fontSizeFactor = s.textZoom / 100f
                 keepScreenOn = s.keepScreenOn
                 if (!keepScreenOn) releaseScreen.run()

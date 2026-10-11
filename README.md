@@ -23,20 +23,24 @@ In particular, Gecko-specific behaviour is unverified until it runs on the watch
 
 ## What it does
 
-### Four ways to draw a page (remembered per site)
+### Three views, plus Reader
 
-| Mode | When | How |
-|---|---|---|
-| **Mobile** | The default (site mode *Mobile*) | The site's own **mobile version**, exactly as a phone would show it: Gecko's mobile user agent and viewport, nothing restyled. Pinch zooms. With **Settings → Desktop sites** on, sites get their desktop version instead (see *Desktop*). |
-| **Paged Reader** | Articles (site mode *Mobile*), or forced with *Reader* | Mozilla Readability extracts the article, then Orbit sets it as **circular pages**: two floats whose `shape-outside` polygons cover everything outside the circle, so lines are short at the top and bottom and full width in the middle. Each bezel click turns one page, with a dial-swing animation and a haptic tick. Images get their own page, scaled into the inscribed square. Tables and code get a page whose square scrolls. A progress arc runs around the rim, and "4 / 12" appears for a moment at the bottom. Pure `#000` background. |
-| **Round fit** | Opt-in, with *Round fit* | The content column is capped to the inscribed square (d/√2) and padded top and bottom by the circle-to-square gap. The viewport is forced to `device-width`. Fixed headers and cookie bars go back into the flow. Only tables too wide for the column get a horizontal scroll box. Code wraps. A radial vignette fades the rim on purpose. A scroll arc sits on the right edge. |
-| **Desktop** | *Desktop*, or every site with **Settings → Desktop sites** on | The site's desktop version (desktop user agent and width) in overview. Pinch zooms, or pick *Zoom* on the bezel arc to zoom with the bezel. Double-tap zooms the tapped block. |
+**Settings → View** picks how sites render: **Mobile**, **Compact** or **Desktop**. A site's own
+View (**More → View**: Auto → Reader → Compact → Desktop → Mobile) is saved for that site and wins;
+*Auto* follows the setting.
 
-Round fit restyles the page to fit the circle. It reads well on simple pages but breaks some
-sites, so it is no longer the default.
+| View | How |
+|---|---|
+| **Mobile** (default) | The site's own **mobile version**, exactly as a phone would show it: Gecko's mobile user agent and viewport, nothing restyled. Pinch zooms. |
+| **Compact** | The mobile version laid out at a phone's width (360 CSS px) and scaled to fit, so more of the page shows at once (`compact.js` rewrites the page's viewport at document start). |
+| **Desktop** | The site's desktop version (desktop user agent and width) in overview. Pinch zooms, or pick *Zoom* in the mode bar to zoom with the bezel. Double-tap zooms the tapped block. |
+| **Reader** | Articles on sites left on *Auto*, or forced with *Reader*: Mozilla Readability extracts the article, then Orbit sets it as **circular pages**: two floats whose `shape-outside` polygons cover everything outside the circle, so lines are short at the top and bottom and full width in the middle. Each bezel click turns one page, with a dial-swing animation and a haptic tick. Images get their own page, scaled into the inscribed square. Tables and code get a page whose square scrolls. A progress arc runs around the rim, and "4 / 12" appears for a moment at the bottom. Pure `#000` background. |
 
-Switch with **More → View** (Mobile → Reader → Round fit → Desktop). The choice is saved for the site
-and wins over the Desktop sites setting.
+The old Round fit layout (`round.js`) is no longer used by the app; it stays as the harness the
+reader and link checks run in.
+
+While a page loads it is covered by a spinner and the site name until its first paint, which also
+hides the page being left (the results page, when a result is opened).
 
 ### Search results as native cards
 
@@ -69,7 +73,8 @@ any page. Lists follow the circle, and rows dim and blur as they move away from 
   - The mic fills the centre.
   - Up to six actions orbit it: keyboard, continue reading, three bookmarks (as letter avatars), and More.
   - The bezel moves a highlight ring around them, and the highlighted name curves along the bottom edge.
-- **On a page**, a **tap** (anywhere that isn't a link) brings back the chrome: a pill with the time and the site at the top, and the bezel-mode bar at the bottom. A **hold** opens the ring menu.
+- **On a page**, a **tap** (anywhere that isn't a link) brings back the chrome: a pill with the time and the site at the top, and a short handle at the bottom edge. **Pull up from the bottom edge** to open the bezel-mode bar; picking a mode puts it away. A **hold** opens the ring menu.
+- **Swipe right** closes the address entry, lists and link options (or press the watch's Back button).
 - **Ring menu.** Hold anywhere on a page to open it. Eight round buttons over the dimmed page: Search, Forward, Reload, Bookmark, Tabs, History, More, Back.
   - The bezel moves the highlight and a centre tap confirms; you can also tap a button directly.
   - Unavailable items are dimmed, never removed, so positions stay put.
@@ -81,7 +86,7 @@ any page. Lists follow the circle, and rows dim and blur as they move away from 
 
 What the bezel does is shown as **four tappable segments along the bottom edge** whenever the
 chrome is up: *Pages · Links · Cursor · Text* in Reader, *Scroll · Links · Cursor · Zoom*
-elsewhere. Tap the page to bring them back, then tap one. Every page starts in *Scroll*.
+elsewhere. Pull up from the bottom edge to bring them up, then tap one. Every page starts in *Scroll*.
 **Pinch zooms in every mode.**
 
 1. **Scroll**: smooth steps with momentum (a fast spin flings); **page turns** in Reader.
@@ -89,7 +94,7 @@ elsewhere. Tap the page to bring them back, then tap one. Every page starts in *
    - "Link 3 of 9" curves along the top, and a pill at the bottom says **Open link · Hold for options**.
    - Only the pill opens the link. A tap elsewhere just shows the chrome, so nothing opens by accident.
    - Past the last visible link the page scrolls (or turns) and focus continues. Back leaves link mode.
-3. **Cursor**: the screen becomes a trackpad. Drag anywhere to move a soft grey pointer (it moves 1.6× the finger, so the finger never hides the target), and **tap to click** under it. Pushing the cursor past the top or bottom of the circle scrolls the page. The bezel still scrolls, a hold still opens the ring, and two fingers still pinch. Moving the cursor brings back the mode bar.
+3. **Cursor**: a soft grey cursor stays in the middle of the screen and the page moves under it. Drag anywhere to move the page (both ways, so a zoomed-in page pans like a map), and **tap to click** under the cursor. The bezel still scrolls, a hold still opens the ring, and two fingers still pinch.
 4. **Zoom**: zooms the page with the bezel. In Reader it changes the text size and re-paginates on the same word.
 
 Every bezel click gives a haptic tick. The end of a page or article gives a firmer bump.
@@ -145,7 +150,7 @@ app (BrowserController, OrbitExtension) ⇄ native port "orbit" ⇄ background.j
 ```
 
 - **`background.js`** is the hub, kept stateless apart from a few settings. It:
-  - registers the Round fit layout (when a site uses it) and the WebGL guard as document-start content scripts;
+  - registers the Compact view (when a site uses it) and the WebGL guard as document-start content scripts;
   - injects Readability, `serp.js` and `links.js` on request (`tabs.executeScript`, main frame only);
   - relays page messages to the app and app commands to pages, one at a time, in order;
   - blocks images for the per-site *Block images* setting and on search-results pages;
@@ -191,7 +196,8 @@ app/src/main/
     manifest.json, background.js        the hub: app port, content scripts, injection, image blocking
     bridge.js                           page side: orbitBridge, scroll metrics, taps, commands
     webgl.js                            WebGL guard (exportFunction into the page)
-    round.css, round.js                 Round fit (registered at document start)
+    compact.js                          Compact view (registered at document start)
+    round.css, round.js                 Round fit layout (test harness only)
     Readability.js, Readability-readerable.js   Mozilla Readability 0.6.0 (Apache 2.0)
     extract.js                          runs Readability, sanitises the article (allow-list), posts it
     reader.html, reader-boot.js,

@@ -9,10 +9,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -22,14 +20,11 @@ import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.LocalContext
 import kotlin.math.hypot
 
-/** How far the cursor moves per pixel the finger moves. */
-private const val GAIN = 1.6f
-
 /**
- * Cursor mode: the screen is a trackpad over the page.
+ * Cursor mode: a cursor fixed in the middle of the screen, with the page moving under it.
  *
- * - One finger drags the cursor (relative, so the finger never covers what it points at). Pushed
- *   past the top or bottom of the circle, it scrolls the page by the overshoot ([onScroll]).
+ * - One finger drags the page (both ways, so a zoomed-in page pans like a map) and the cursor
+ *   stays centred for easy aim ([onPan], view px, finger direction).
  * - A tap clicks under the cursor ([onClick], view px); a hold opens the ring ([onHold]).
  * - A second finger hands the whole gesture to the page ([forward]), so pinch zoom still works.
  *
@@ -42,7 +37,7 @@ fun CursorLayer(
     onClick: (x: Float, y: Float) -> Unit,
     onHold: () -> Unit,
     onMove: () -> Unit,
-    onScroll: (dy: Float) -> Unit,
+    onPan: (dx: Float, dy: Float) -> Unit,
     forward: (MotionEvent) -> Unit,
 ) {
     val context = LocalContext.current
@@ -52,20 +47,8 @@ fun CursorLayer(
     DisposableEffect(handler) { onDispose { handler.removeCallbacksAndMessages(null) } }
     val hold by rememberUpdatedState(onHold)
 
-    var cursor by remember { mutableStateOf(Offset(geometry.centerXPx, geometry.centerYPx)) }
+    val cursor = Offset(geometry.centerXPx, geometry.centerYPx)
     val gesture = remember { CursorGesture() }
-    val margin = 6f * geometry.density
-
-    /** Keeps [p] inside the circle; returns the clamped point and the vertical overshoot. */
-    fun clamp(p: Offset): Pair<Offset, Float> {
-        val dx = p.x - geometry.centerXPx
-        val dy = p.y - geometry.centerYPx
-        val r = hypot(dx, dy)
-        val max = geometry.radiusPx - margin
-        if (r <= max) return p to 0f
-        val inside = Offset(geometry.centerXPx + dx / r * max, geometry.centerYPx + dy / r * max)
-        return inside to (p.y - inside.y)
-    }
 
     Canvas(
         Modifier.fillMaxSize().pointerInteropFilter { ev ->
@@ -99,9 +82,7 @@ fun CursorLayer(
                         handler.removeCallbacksAndMessages(null)
                     }
                     if (gesture.moved) {
-                        val (p, over) = clamp(Offset(cursor.x + dx * GAIN, cursor.y + dy * GAIN))
-                        cursor = p
-                        if (over != 0f) onScroll(over)
+                        onPan(dx, dy)
                         onMove()
                     }
                     gesture.lastX = ev.x

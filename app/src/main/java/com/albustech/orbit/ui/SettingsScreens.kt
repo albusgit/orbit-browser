@@ -37,6 +37,7 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import com.albustech.orbit.BuildConfig
 import com.albustech.orbit.R
+import com.albustech.orbit.browser.RenderMode
 import com.albustech.orbit.data.ReaderStyle
 import com.albustech.orbit.data.SearchEngine
 import com.albustech.orbit.data.Settings
@@ -49,7 +50,7 @@ fun SettingsScreen(
     settings: Settings,
     onSearch: (String) -> Unit,
     onBlock: (Boolean) -> Unit,
-    onDesktop: (Boolean) -> Unit,
+    onView: (RenderMode) -> Unit,
     onKeepOn: (Boolean) -> Unit,
     onSerif: (Boolean) -> Unit,
     onClearHistory: () -> Unit,
@@ -65,10 +66,10 @@ fun SettingsScreen(
         }
         item { MenuSwitch(stringResource(R.string.settings_block), settings.blockTrackers, onBlock, secondary = stringResource(R.string.settings_block_lists)) }
         item {
-            MenuSwitch(
-                stringResource(R.string.settings_desktop), settings.desktopSites, onDesktop,
-                secondary = stringResource(if (settings.desktopSites) R.string.settings_desktop_on else R.string.settings_desktop_off),
-            )
+            val views = RenderMode.VIEWS
+            MenuButton(R.drawable.ic_article, stringResource(R.string.settings_view), {
+                onView(views[(views.indexOf(settings.defaultView) + 1) % views.size])
+            }, secondary = viewLabel(settings.defaultView))
         }
         item { MenuSwitch(stringResource(R.string.settings_keep_on), settings.keepScreenOn, onKeepOn) }
         item { MenuSwitch(stringResource(R.string.settings_serif), settings.reader.serif, onSerif) }

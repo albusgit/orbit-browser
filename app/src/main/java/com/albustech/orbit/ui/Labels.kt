@@ -26,6 +26,7 @@ fun siteModeLabel(m: SiteMode): String = stringResource(
         SiteMode.READER -> R.string.view_reader
         SiteMode.SCROLL -> R.string.view_scroll
         SiteMode.ZOOM -> R.string.view_zoom
+        SiteMode.MOBILE -> R.string.view_mobile
     },
 )
 
@@ -45,3 +46,12 @@ fun bezelIcon(b: BezelMode): Int = when (b) {
     BezelMode.CURSOR -> R.drawable.ic_mode_cursor
     BezelMode.ZOOM -> R.drawable.ic_mode_zoom
 }
+
+@Composable
+fun viewLabel(v: RenderMode): String = stringResource(
+    when (v) {
+        RenderMode.COMPACT -> R.string.view_scroll
+        RenderMode.ZOOM -> R.string.view_zoom
+        else -> R.string.view_mobile
+    },
+)

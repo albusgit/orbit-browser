@@ -4,7 +4,7 @@
  *   app (OrbitExtension.kt) ⇄ native port "orbit" ⇄ this ⇄ bridge.js / reader page / injected scripts
  *
  * From the app (port messages, { cmd, ... }):
- *   round    { on, geometry: {d, sq, inset} }  Round Scroll layout at document start, or off
+ *   compact  { on }                            Compact view (phone-width layout) at document start, or off
  *   webgl    { allow: [host] }                 WebGL guard everywhere except these sites
  *   images   { block }                         cancel image requests for the page on screen
  *   inject   { what: 'extract'|'serp'|'links', force }   run page scripts in the main frame
@@ -34,9 +34,8 @@ const state = {
   tabId: null,
   blockImages: false,
   payloads: new Map(),
-  roundScript: null,
+  compactScript: null,
   webglScript: null,
-  roundCss: null,
   chain: Promise.resolve(),
 };
 
@@ -86,7 +85,7 @@ function toApp(msg) {
 async function onAppMessage(msg) {
   try {
     switch (msg && msg.cmd) {
-      case 'round': await setRound(msg.on, msg.geometry); break;
+      case 'compact': await setCompact(!!msg.on); break;
       case 'webgl': await setWebGl(msg.allow || []); break;
       case 'images': state.blockImages = !!msg.block; break;
       case 'inject': await inject(msg.what, !!msg.force); break;
@@ -141,19 +140,16 @@ function keepPayload(token, payload) {
 
 // ------------------------------------------------------- document-start scripts
 
-async function setRound(on, geometry) {
-  if (state.roundScript) {
-    const old = state.roundScript;
-    state.roundScript = null;
+async function setCompact(on) {
+  if (state.compactScript) {
+    const old = state.compactScript;
+    state.compactScript = null;
     await old.unregister();
   }
-  if (!on || !geometry) return;
-  if (state.roundCss == null) state.roundCss = await (await fetch(browser.runtime.getURL('round.css'))).text();
-  const g = { d: Number(geometry.d) || 0, sq: Number(geometry.sq) || 0, inset: Number(geometry.inset) || 0 };
-  const prefix = `window.__orbit=${JSON.stringify(g)};window.__orbitCss=${JSON.stringify(state.roundCss)};`;
-  state.roundScript = await browser.contentScripts.register({
+  if (!on) return;
+  state.compactScript = await browser.contentScripts.register({
     matches: WEB,
-    js: [{ code: prefix }, { file: 'round.js' }],
+    js: [{ file: 'compact.js' }],
     runAt: 'document_start',
     allFrames: false,
   });
@@ -187,4 +183,4 @@ browser.webRequest.onBeforeRequest.addListener(
 setWebGl([]).catch(() => {});
 connect();
 
-if (typeof module !== 'undefined') module.exports = { state, onAppMessage, keepPayload, setWebGl, setRound, inject, toApp };
+if (typeof module !== 'undefined') module.exports = { state, onAppMessage, keepPayload, setWebGl, setCompact, inject, toApp };

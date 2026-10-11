@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.wear.compose.material3.AppScaffold
 import androidx.wear.compose.material3.OpenOnPhoneDialog
 import androidx.wear.compose.material3.OpenOnPhoneDialogDefaults
+import androidx.wear.compose.material3.SwipeToDismissBox
 import androidx.wear.compose.material3.openOnPhoneDialogCurvedText
 import com.albustech.orbit.R
 import com.albustech.orbit.browser.BezelMode
@@ -108,6 +109,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
     val resources = LocalResources.current
     val overlays = remember { mutableStateListOf<Overlay>() }
     var chromeVisible by remember { mutableStateOf(true) }
+    var barVisible by remember { mutableStateOf(false) }
     var label by remember { mutableStateOf<String?>(null) }
     var labelTick by remember { mutableIntStateOf(0) }
     var phoneDialog by remember { mutableStateOf(false) }
@@ -150,6 +152,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
         }
         bezel.onInteraction = {
             chromeVisible = false
+            barVisible = false
             deps.actions.onUserActivity()
         }
         bezel.onPageTap = { chromeVisible = true }
@@ -222,6 +225,8 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
                 modifier = Modifier.fillMaxSize(),
             )
 
+            if (onPage && c.awaitingPaint && c.error == null) LoadingCover(host)
+
             if (!c.hasPage) {
                 Launcher(
                     geometry = geometry,
@@ -266,12 +271,8 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
                         c.clickAt(x, y)
                     },
                     onHold = ::openRing,
-                    // Moving the cursor brings back the chrome, so the mode arc is in reach.
-                    onMove = {
-                        chromeVisible = true
-                        deps.actions.onUserActivity()
-                    },
-                    onScroll = c::scrollByPx,
+                    onMove = { deps.actions.onUserActivity() },
+                    onPan = c::panBy,
                     forward = { ev -> c.view.onTouchEvent(ev) },
                 )
             }
@@ -299,23 +300,44 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
 
             if (onPage && overlays.isEmpty()) {
                 val modes = BezelMode.entries
+                // Bezel modes are pulled up from the bottom edge; picking one puts the bar away.
+                PullUpZone(showHandle = chromeVisible && !barVisible) {
+                    barVisible = true
+                    bezel.haptics.tick()
+                }
+                val modeLabels = modes.map { bezelLabel(it, c.renderMode) }
                 BezelModeBar(
                     geometry = geometry,
-                    labels = modes.map { bezelLabel(it, c.renderMode) },
+                    labels = modeLabels,
                     icons = modes.map(::bezelIcon),
                     selected = modes.indexOf(c.bezelMode),
-                    visible = chromeVisible,
+                    visible = barVisible,
                     onSelect = { i ->
                         c.setBezel(modes[i])
                         bezel.haptics.confirm()
+                        barVisible = false
+                        chromeVisible = false
+                        show(modeLabels[i])
                     },
                 )
                 BottomCurvedLabel(if (!ambient && !chromeVisible) label else null)
             }
 
             top?.let { overlay ->
-                OverlayContent(overlay, deps, settings, connection, bookmarked, bookmarks, history, overlays, entry,
-                    ::open, ::openOnPhone, ::toggleBookmark)
+                val content = @Composable {
+                    OverlayContent(overlay, deps, settings, connection, bookmarked, bookmarks, history, overlays, entry,
+                        ::open, ::openOnPhone, ::toggleBookmark)
+                }
+                // Rings dismiss themselves; every other screen (entry, lists, link options) closes
+                // with a swipe right, the Wear way out of typing or browsing a list.
+                if (overlay is Overlay.Ring || overlay is Overlay.More) {
+                    content()
+                } else {
+                    SwipeToDismissBox(
+                        onDismissed = { if (overlays.isNotEmpty()) overlays.removeAt(overlays.lastIndex) },
+                        backgroundScrimColor = Color.Transparent,
+                    ) { isBackground -> if (!isBackground) content() }
+                }
             }
 
             if (ambient) {
@@ -468,7 +490,7 @@ private fun OverlayContent(
             settings = settings,
             onSearch = deps.settingsRepo::setSearchTemplate,
             onBlock = deps.settingsRepo::setBlockTrackers,
-            onDesktop = deps.settingsRepo::setDesktopSites,
+            onView = deps.settingsRepo::setDefaultView,
             onKeepOn = deps.settingsRepo::setKeepScreenOn,
             onSerif = { v -> deps.settingsRepo.setReaderStyle(settings.reader.copy(serif = v)) },
             onClearHistory = { scope.launch { deps.repo.clearHistory() } },

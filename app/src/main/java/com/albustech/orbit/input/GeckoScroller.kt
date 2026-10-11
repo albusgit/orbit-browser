@@ -40,9 +40,9 @@ class GeckoScroller(private val panZoom: () -> PanZoomController?) {
 
     fun stop() = momentum.reset()
 
-    /** Scrolls by [dy] screen pixels at once (the cursor pushed past the edge of the circle). */
-    fun scrollBy(dy: Float) {
-        panZoom()?.scrollBy(ScreenLength.zero(), ScreenLength.fromPixels(dy.toDouble()), PanZoomController.SCROLL_BEHAVIOR_AUTO)
+    /** Scrolls by ([dx], [dy]) screen pixels at once (cursor mode dragging the page). */
+    fun scrollBy(dx: Float, dy: Float) {
+        panZoom()?.scrollBy(ScreenLength.fromPixels(dx.toDouble()), ScreenLength.fromPixels(dy.toDouble()), PanZoomController.SCROLL_BEHAVIOR_AUTO)
     }
 
     /**
