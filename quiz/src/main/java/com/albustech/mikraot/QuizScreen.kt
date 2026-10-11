@@ -75,10 +75,10 @@ private const val AUTO_NEXT_MS = 900L
 /**
  * The round quiz screen. The circle is split into bands:
  *  - the top cap: score and streak;
- *  - the middle: the question, then the four answers as pills. The pill the bezel is on
- *    opens to its full text (up to three lines); the rest stay one line, so four answers
- *    always fit. All text is sized once per question so that the worst case fits the circle;
- *  - the right edge: four notches showing which answer the bezel is on;
+ *  - the middle: the question, then the answers (2–5) as pills. The pill the bezel is on
+ *    opens to its full text; the rest stay one line, so all answers always fit. All text is
+ *    sized once per question so that the worst case fits the circle (see [Fit]);
+ *  - the right edge: one notch per answer, showing which one the bezel is on;
  *  - the bottom cap: what to do next.
  *
  * Bezel: move between answers (a click each), skipping wrong picks. Tap: answer with the lit
@@ -86,7 +86,7 @@ private const val AUTO_NEXT_MS = 900L
  * and then it moves on by itself. Long press: stats.
  */
 @Composable
-fun QuizScreen(state: QuizState, onInteract: () -> Unit = {}) {
+fun QuizScreen(state: QuizState, title: String, onInteract: () -> Unit = {}) {
     val view = LocalView.current
     val accumulator = remember(view) {
         DetentAccumulator(ViewConfiguration.get(view.context).scaledVerticalScrollFactor * 0.9f)
@@ -141,7 +141,7 @@ fun QuizScreen(state: QuizState, onInteract: () -> Unit = {}) {
             Header(d, state)
             Body(d, state, onInteract)
             Footer(d, state)
-            if (state.showStats) Stats(state, onInteract)
+            if (state.showStats) Stats(state, title, onInteract)
         }
     }
 }
@@ -157,9 +157,9 @@ private fun Rim(d: Dp, state: QuizState, verdict: Color?, flash: Float) {
         if (verdict != null) {
             drawArc(verdict.copy(alpha = flash), 0f, 360f, false, topLeft, arcSize, style = Stroke(stroke))
         }
-        // Slot 0 is the top notch, at -NOTCH_SPAN*1.5 from 3 o'clock (angles grow clockwise).
-        for (slot in 0 until QuizState.SLOTS) {
-            val center = (slot - 1.5f) * NOTCH_STEP
+        // Slot 0 is the top notch; the notches are centred on 3 o'clock (angles grow clockwise).
+        for (slot in 0 until state.slots) {
+            val center = (slot - (state.slots - 1) / 2f) * NOTCH_STEP
             val color = when {
                 state.answered && state.isCorrect(slot) -> RightRim
                 slot in state.wrong -> WrongRim
@@ -217,14 +217,24 @@ private fun CapText(text: String, modifier: Modifier, color: Color) {
 }
 
 /** Font sizes for one question, scaled down together until the worst case fits. */
-private class Fit(val scale: Float) {
+/**
+ * Font sizes for one question, scaled down together until the worst case fits. When even the
+ * smallest size can't fit a long answer opened in full, the question is [compact]: it drops to
+ * [COMPACT_LINES] lines while an answer is lit, and the open answer gets the room.
+ */
+private class Fit(val scale: Float, val compact: Boolean) {
     val question: TextUnit = (QUESTION_SP * scale).sp
     val answer: TextUnit = (ANSWER_SP * scale).sp
+    val mark: Dp = markSize(scale)
 }
+
+/** The ✓/✗ mark shrinks with the text, so a marked one-line pill stays one line tall. */
+private fun markSize(scale: Float): Dp = (18f * scale).coerceAtLeast(12f).dp
 
 private const val QUESTION_SP = 15.5f
 private const val ANSWER_SP = 14f
-private const val OPEN_LINES = 3
+private const val COMPACT_LINES = 2
+private const val LINE_HEIGHT = 1.15f
 private val RowPadH = 10.dp
 private val RowPadV = 5.dp
 private val RowGap = 4.dp
@@ -232,9 +242,11 @@ private val QuestionGap = 8.dp
 
 @Composable
 private fun Body(d: Dp, state: QuizState, onInteract: () -> Unit) {
-    val width = d * 0.70f
-    val top = d * 0.13f
-    val height = d * 0.74f
+    // The answers sit around the middle, where the circle is widest: 0.78 of the diameter
+    // still clears the edge down to 0.83 of the height.
+    val width = d * 0.78f
+    val top = d * 0.12f
+    val height = d * 0.71f
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val fit = remember(state.index, d) {
@@ -244,20 +256,26 @@ private fun Body(d: Dp, state: QuizState, onInteract: () -> Unit) {
             val rowW = (width - RowPadH * 2).roundToPx()
             fun h(text: String, sp: Float, bold: Boolean, w: Int, lines: Int) = measurer.measure(
                 text,
-                TextStyle(fontSize = sp.sp, fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal),
+                TextStyle(
+                    fontSize = sp.sp, lineHeight = (sp * LINE_HEIGHT).sp,
+                    fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+                ),
                 maxLines = lines,
                 constraints = Constraints(maxWidth = w),
             ).size.height
-            val scale = SCALES.firstOrNull { s ->
-                // Worst case: the longest answer is open (lit, or right).
-                val closed = q.answers.map { h(it, ANSWER_SP * s, false, rowW, 1) }
-                val open = q.answers.map { h(it, ANSWER_SP * s, true, rowW - (MarkSize * 1.5f + 2.dp).roundToPx(), OPEN_LINES) }
-                val growth = q.answers.indices.map { open[it] - closed[it] }.max()
-                val total = h(q.text, QUESTION_SP * s, true, textW, Int.MAX_VALUE) + QuestionGap.roundToPx() +
-                    closed.sum() + growth + (RowPadV * 2 * 4 + RowGap * 3).roundToPx()
-                total <= height.roundToPx()
-            } ?: SCALES.last()
-            Fit(scale)
+            // Worst case: the longest answer is open in full (lit, or right with its mark).
+            fun fits(s: Float, questionLines: Int): Boolean {
+                val mark = markSize(s)
+                // A closed pill may carry a mark (a wrong pick): at least the mark's height.
+                val closed = q.answers.map { maxOf(h(it, ANSWER_SP * s, false, rowW, 1), mark.roundToPx()) }
+                val open = q.answers.map { h(it, ANSWER_SP * s, true, rowW - (mark * 1.5f + 2.dp).roundToPx(), Int.MAX_VALUE) }
+                val growth = q.answers.indices.maxOf { open[it] - closed[it] }
+                val total = h(q.text, QUESTION_SP * s, true, textW, questionLines) + QuestionGap.roundToPx() +
+                    closed.sum() + growth + (RowPadV * 2 * q.answers.size + RowGap * (q.answers.size - 1)).roundToPx()
+                return total <= height.roundToPx()
+            }
+            SCALES.firstOrNull { fits(it, Int.MAX_VALUE) }?.let { Fit(it, compact = false) }
+                ?: Fit(SCALES.firstOrNull { fits(it, COMPACT_LINES) } ?: SCALES.last(), compact = true)
         }
     }
 
@@ -274,11 +292,13 @@ private fun Body(d: Dp, state: QuizState, onInteract: () -> Unit) {
             Modifier.fillMaxWidth(),
             style = TextStyle(
                 color = Color.White, fontSize = fit.question, fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center, lineHeight = fit.question * 1.15f,
+                textAlign = TextAlign.Center, lineHeight = fit.question * LINE_HEIGHT,
             ),
+            maxLines = if (fit.compact && state.highlighted != null) COMPACT_LINES else Int.MAX_VALUE,
+            overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(QuestionGap))
-        for (slot in 0 until QuizState.SLOTS) {
+        for (slot in 0 until state.slots) {
             if (slot > 0) Spacer(Modifier.height(RowGap))
             AnswerPill(state, slot, fit, onInteract)
         }
@@ -324,29 +344,28 @@ private fun AnswerPill(state: QuizState, slot: Int, fit: Fit, onInteract: () -> 
         }
         BasicText(
             state.answer(slot),
-            Modifier.fillMaxWidth().padding(start = if (mark != null) MarkSize / 2 else 0.dp, end = if (mark != null) MarkSize + 2.dp else 0.dp),
+            Modifier.fillMaxWidth().padding(start = if (mark != null) fit.mark / 2 else 0.dp, end = if (mark != null) fit.mark + 2.dp else 0.dp),
             style = TextStyle(
                 color = Color.White,
                 fontSize = fit.answer,
                 fontWeight = if (open) FontWeight.SemiBold else FontWeight.Normal,
                 textAlign = TextAlign.Center,
-                lineHeight = fit.answer * 1.15f,
+                lineHeight = fit.answer * LINE_HEIGHT,
             ),
-            maxLines = if (open) OPEN_LINES else 1,
+            maxLines = if (open) Int.MAX_VALUE else 1,
             overflow = TextOverflow.Ellipsis,
         )
-        if (mark != null) MarkIcon(mark, Modifier.align(Alignment.CenterEnd))
+        if (mark != null) MarkIcon(mark, fit.mark, Modifier.align(Alignment.CenterEnd))
     }
 }
 
 private enum class Mark { Right, Wrong }
 
-private val MarkSize = 18.dp
 
 /** The verdict at the pill's end: a ringed check or cross, white on the pill's colour. */
 @Composable
-private fun MarkIcon(mark: Mark, modifier: Modifier) {
-    Canvas(modifier.size(MarkSize)) {
+private fun MarkIcon(mark: Mark, diameter: Dp, modifier: Modifier) {
+    Canvas(modifier.size(diameter)) {
         val w = size.width
         val stroke = Stroke(w * 0.09f, cap = StrokeCap.Round)
         drawCircle(Color.White, radius = w / 2 - stroke.width / 2, style = stroke)
@@ -363,11 +382,11 @@ private fun MarkIcon(mark: Mark, modifier: Modifier) {
     }
 }
 
-private val SCALES = listOf(1f, 0.93f, 0.86f, 0.8f, 0.74f, 0.68f)
+private val SCALES = listOf(1f, 0.93f, 0.86f, 0.8f, 0.74f, 0.68f, 0.63f, 0.58f)
 
 /** Long press: totals, and a two-tap reset. */
 @Composable
-private fun Stats(state: QuizState, onInteract: () -> Unit) {
+private fun Stats(state: QuizState, title: String, onInteract: () -> Unit) {
     val p = state.progress
     var armed by remember { mutableStateOf(false) }
     Box(
@@ -379,7 +398,7 @@ private fun Stats(state: QuizState, onInteract: () -> Unit) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             val line = TextStyle(color = Color.White, fontSize = 14.sp, textAlign = TextAlign.Center)
-            BasicText("שער 1 · מבנה וסמלים", style = line.copy(color = Accent, fontWeight = FontWeight.SemiBold))
+            BasicText(title, style = line.copy(color = Accent, fontWeight = FontWeight.SemiBold))
             Spacer(Modifier.height(8.dp))
             BasicText("שולטים: ${p.mastered} מתוך ${p.size}", style = line)
             val pct = if (p.answered == 0) 0 else p.correct * 100 / p.answered

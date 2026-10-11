@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -23,67 +24,70 @@ import kotlin.random.Random
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 abstract class ScreenshotTest(private val tag: String) {
 
-    private fun shot(name: String, state: QuizState) =
+    private fun shot(name: String, content: @Composable () -> Unit) =
         captureRoboImage("build/screenshots/${name}_$tag.png") {
             Box(Modifier.fillMaxSize().background(Color(0xFF1B1C1E))) {
-                Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.Black)) { QuizScreen(state) }
+                Box(Modifier.fillMaxSize().clip(CircleShape).background(Color.Black)) { content() }
             }
         }
 
-    /** A state on question [text] (or the first one asked). */
-    private fun state(text: String? = null): QuizState {
-        val s = QuizState(GATE_1, Progress(GATE_1.size), random = Random(11))
-        if (text != null) {
-            var guard = 0
-            while (s.question.text != text && guard++ < 500) s.next()
-            // next() only cycles the queue head; walk it by answering right instead.
-            while (s.question.text != text && guard++ < 1000) { s.choose((0 until 4).first { s.isCorrect(it) }); s.next() }
-        }
-        return s
-    }
+    private fun quiz(name: String, state: QuizState) = shot(name) { QuizScreen(state, title = "ישראל: תעודת זהות") }
 
-    private val longest = GATE_1.maxBy { q -> q.text.length + q.answers.sumOf { it.length } }.text
+    private fun state() = QuizState(TestBank.gate1, Progress(TestBank.gate1.size), random = Random(11))
 
-    @Test fun fresh() = shot("1_fresh", state())
+    /** A state showing just [q]. */
+    private fun only(q: Question) = QuizState(listOf(q), Progress(1), random = Random(3))
 
-    @Test fun lit() = shot("2_lit", state().apply { rotate(2) })
+    private val all = TestBank.parts.flatMap { it.questions }
+    private val longest = all.maxBy { q -> q.text.length + q.answers.sumOf { it.length } }
+    private val longestAnswer = all.maxBy { q -> q.answers.maxOf { it.length } }
+    private val five = all.firstOrNull { it.answers.size == 5 }
+    private val two = all.firstOrNull { it.answers.size == 2 }
 
-    @Test fun wrong() = shot("3_wrong", state().apply { choose((0 until 4).first { !isCorrect(it) }) })
+    private fun QuizState.wrongs() = (0 until slots).filter { !isCorrect(it) }
+    private fun QuizState.right() = (0 until slots).first { isCorrect(it) }
+    private fun QuizState.longestSlot(of: List<Int>) = of.maxBy { answer(it).length }
 
-    @Test fun wrongThenLit() = shot("3b_wrong_then_lit", state().apply {
-        val w = (0 until 4).filter { !isCorrect(it) }
+    @Test fun fresh() = quiz("1_fresh", state())
+
+    @Test fun lit() = quiz("2_lit", state().apply { rotate(2) })
+
+    @Test fun wrong() = quiz("3_wrong", state().apply { choose(wrongs().first()) })
+
+    @Test fun wrongThenLit() = quiz("3b_wrong_then_lit", state().apply {
+        val w = wrongs()
         choose(w[0]); choose(w[1])
         rotate(1)
     })
 
-    @Test fun wrongThenRight() = shot("3c_wrong_then_right", state().apply {
-        choose((0 until 4).first { !isCorrect(it) })
-        choose((0 until 4).first { isCorrect(it) })
-    })
+    @Test fun right() = quiz("4_right", state().apply { choose(wrongs().first()); choose(right()) })
 
-    @Test fun right() = shot("4_right", state().apply { choose((0 until 4).first { isCorrect(it) }) })
+    @Test fun longestLit() = quiz("5_longest_lit", only(longest).apply { highlighted = longestSlot((0 until slots).toList()) })
 
-    @Test fun longestLit() = shot("5_longest_lit", state(longest).apply {
-        // Light the longest answer.
-        highlighted = (0 until 4).maxBy { answer(it).length }
-    })
+    @Test fun longestRight() = quiz("6_longest_right", only(longest).apply { choose(longestSlot(wrongs())); choose(right()) })
 
-    @Test fun longestWrong() = shot("6_longest_wrong", state(longest).apply {
-        choose((0 until 4).filter { !isCorrect(it) }.maxBy { answer(it).length })
-    })
+    @Test fun longestAnswerLit() = quiz("6b_longest_answer", only(longestAnswer).apply { highlighted = longestSlot((0 until slots).toList()) })
 
-    @Test fun longestRight() = shot("6b_longest_right", state(longest).apply {
-        choose((0 until 4).filter { !isCorrect(it) }.maxBy { answer(it).length })
-        choose((0 until 4).first { isCorrect(it) })
-    })
+    @Test fun fiveAnswers() = quiz("6c_five", only(five ?: longest).apply { rotate(1) })
 
-    @Test fun stats() = shot("7_stats", state().apply {
+    @Test fun twoAnswers() = quiz("6d_two", only(two ?: longest).apply { choose(wrongs().first()) })
+
+    @Test fun stats() = quiz("7_stats", state().apply {
         repeat(9) {
-            if (it % 4 == 0) choose((0 until 4).first { s -> !isCorrect(s) })
-            choose((0 until 4).first(::isCorrect)); next()
+            if (it % 4 == 0) choose(wrongs().first())
+            choose(right()); next()
         }
         showStats = true
     })
+
+    private val entries = listOf(PickerEntry(0, "כל השערים", all.size, 41)) +
+        TestBank.parts.mapIndexed { i, p -> PickerEntry(p.number, p.title, p.questions.size, (p.questions.size * i) / 14) }
+
+    @Test fun pickerFirst() = shot("8_picker_all") { PartPicker(entries, 0, {}, {}) }
+
+    @Test fun pickerMiddle() = shot("8b_picker_part") { PartPicker(entries, 6, {}, {}) }
+
+    @Test fun pickerLast() = shot("8c_picker_last") { PartPicker(entries, entries.lastIndex, {}, {}) }
 }
 
 @Config(sdk = [36], qualifiers = "w240dp-h240dp-round-watch-xhdpi")

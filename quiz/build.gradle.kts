@@ -67,9 +67,12 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.wear.compose.foundation)
     implementation(libs.androidx.profileinstaller)
 
     testImplementation(libs.junit)
+    // Real org.json for plain JVM tests (android.jar only has stubs).
+    testImplementation(libs.json)
     testImplementation(libs.robolectric)
     testImplementation(libs.roborazzi)
     testImplementation(libs.roborazzi.compose)

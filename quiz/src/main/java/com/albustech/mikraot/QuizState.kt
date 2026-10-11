@@ -7,7 +7,7 @@ import androidx.compose.runtime.setValue
 import kotlin.random.Random
 
 /**
- * What the quiz screen shows: the current question, its four answers in a shuffled order
+ * What the quiz screen shows: the current question, its answers in a shuffled order
  * ("slots", top to bottom), the slot the bezel is on, and the wrong picks so far.
  *
  * A question is only passed with its right answer: a wrong pick is marked and you pick
@@ -22,7 +22,7 @@ class QuizState(
     var progress by mutableStateOf(progress); private set
     var index by mutableIntStateOf(progress.current(random)); private set
 
-    /** order[slot] = index into [Question.answers]; 0 is the correct answer. */
+    /** order[slot] = index into [Question.answers]. */
     var order by mutableStateOf(shuffledOrder()); private set
     var highlighted by mutableStateOf<Int?>(null)
     /** The right slot, once picked. */
@@ -36,6 +36,9 @@ class QuizState(
     var answerCount by mutableIntStateOf(0); private set
 
     val question: Question get() = questions[index]
+
+    /** How many answers the current question has (2–5). */
+    val slots: Int get() = order.size
     /** The right answer has been picked. */
     val answered: Boolean get() = chosen != null
 
@@ -43,7 +46,7 @@ class QuizState(
     val lastCorrect: Boolean get() = answered
 
     fun answer(slot: Int): String = question.answers[order[slot]]
-    fun isCorrect(slot: Int): Boolean = order[slot] == 0
+    fun isCorrect(slot: Int): Boolean = order[slot] == question.correct
 
     /** [detents] bezel clicks: move the highlight, wrapping and skipping wrong picks. Returns false if nothing moved. */
     fun rotate(detents: Int): Boolean {
@@ -52,11 +55,11 @@ class QuizState(
             next()
             return true
         }
-        val open = (0 until SLOTS).filter { it !in wrong }
+        val open = (0 until slots).filter { it !in wrong }
         val step = if (detents > 0) 1 else -1
-        var slot = highlighted ?: if (detents > 0) -1 else SLOTS
+        var slot = highlighted ?: if (detents > 0) -1 else slots
         repeat(Math.abs(detents)) {
-            do slot = Math.floorMod(slot + step, SLOTS) while (slot !in open)
+            do slot = Math.floorMod(slot + step, slots) while (slot !in open)
         }
         if (slot == highlighted) return false
         highlighted = slot
@@ -109,9 +112,9 @@ class QuizState(
         next()
     }
 
-    private fun shuffledOrder() = (0 until SLOTS).shuffled(random)
-
-    companion object {
-        const val SLOTS = 4
+    private fun shuffledOrder(): List<Int> {
+        val q = questions[index]
+        val order = q.answers.indices.toList()
+        return if (q.fixed) order else order.shuffled(random)
     }
 }

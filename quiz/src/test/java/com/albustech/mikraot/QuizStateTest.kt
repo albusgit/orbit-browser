@@ -9,7 +9,7 @@ import kotlin.random.Random
 
 class QuizStateTest {
 
-    private fun state() = QuizState(GATE_1, Progress(GATE_1.size), random = Random(7))
+    private fun state() = QuizState(TestBank.gate1, Progress(TestBank.gate1.size), random = Random(7))
 
     @Test
     fun bezelWrapsAroundTheFourAnswers() {
@@ -49,7 +49,7 @@ class QuizStateTest {
     fun theCorrectSlotIsTheFirstAnswer() {
         val s = state()
         val slot = (0 until 4).first { s.isCorrect(it) }
-        assertEquals(s.question.answers[0], s.answer(slot))
+        assertEquals(s.question.answers[s.question.correct], s.answer(slot))
         s.rotate(slot + 1)
         s.tapBackground()
         assertTrue(s.lastCorrect)
