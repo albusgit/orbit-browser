@@ -409,6 +409,12 @@ Also check on both sizes:
 - **Extension pages:** the reader is a `moz-extension:` page, so its URL is not the article's. Orbit shows and bookmarks the article's URL.
 - **APK size:** 85 MiB, the cost of bringing an engine (see above). Install takes a few minutes on the watch.
 
+### Porter: phone app for sideloading
+
+`porter/` is a small phone app that installs APKs on the watch over Wireless debugging. It keeps
+the ADB connection alive and lengthens the watch's screen timeout while it's connected. See
+[porter/README.md](porter/README.md).
+
 ### Phase 2+ (documented, not built): companion phone app
 
 This would be a small Android phone app with a **"Send to watch"** share target. Sharing a URL
