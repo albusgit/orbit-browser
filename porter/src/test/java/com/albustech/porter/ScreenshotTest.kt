@@ -14,7 +14,7 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 // conscrypt-android has no desktop native library; the screen doesn't need TLS.
 @ConscryptMode(ConscryptMode.Mode.OFF)
-@Config(sdk = [35], qualifiers = "w411dp-h1200dp-night-xxhdpi")
+@Config(sdk = [35], qualifiers = "w411dp-h1600dp-night-xxhdpi")
 class ScreenshotTest {
     private val porter = ApplicationProvider.getApplicationContext<PorterApp>().porter
 
@@ -29,6 +29,9 @@ class ScreenshotTest {
             transfers = listOf(
                 Transfer(1, "orbit-0.5.0.apk", isApk = true, size = 88_000_000, sent = 52_000_000, status = Status.Sending),
                 Transfer(2, "notes.txt", isApk = false, size = 1200, sent = 1200, status = Status.Done),
+            ),
+            console = Console(
+                output = "> adb shell getprop ro.product.model\nSM-R960\n> uninstall com.example.old\nSuccess\n",
             ),
             log = listOf("09:41:02  Connected to 192.168.1.50:41234", "09:41:02  Screen timeout 10 min (was 15 s)"),
         )

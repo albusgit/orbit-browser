@@ -28,7 +28,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,6 +40,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -55,7 +59,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,7 +74,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -110,7 +113,6 @@ private val TimeoutChoices = listOf(0 to "Off", 5 * 60_000 to "5 min", 10 * 60_0
 @Composable
 internal fun PorterScreen(porter: Porter) {
     val state by porter.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
     val running = state.phase != Phase.Off
 
     var host by remember { mutableStateOf(state.host) }
@@ -125,6 +127,17 @@ internal fun PorterScreen(porter: Porter) {
 
     val pickApks = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { porter.enqueue(it) }
     val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { porter.enqueue(it) }
+    // Typed `install` and `push` pick their files here, then queue them with the typed options.
+    var typed by remember { mutableStateOf<AdbCommand?>(null) }
+    val pickTyped = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        when (val c = typed) {
+            is AdbCommand.Install -> porter.enqueue(uris, installOptions = c.options.ifEmpty { listOf("-r") })
+            is AdbCommand.Push -> porter.enqueue(uris, remoteDir = c.remoteDir, push = true)
+            else -> Unit
+        }
+        if (uris.isNotEmpty()) porter.echo("Queued ${uris.size} file(s): see Files above.\n")
+        typed = null
+    }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -230,7 +243,27 @@ internal fun PorterScreen(porter: Porter) {
                     Spacer(Modifier.weight(1f))
                     TextButton(onClick = { showPair = !showPair }) { Text(if (showPair) "Hide" else "Show") }
                 }
-                AnimatedVisibility(showPair) { PairForm(host, onPair = { h, p, code -> scope.launch { porter.pair(h, p, code) } }) }
+                AnimatedVisibility(showPair) {
+                    PairForm(host, state.pairing, state.pairStatus, onPair = { h, p, code -> porter.pair(h, p, code) })
+                }
+            }
+
+            Section {
+                CommandBox(
+                    console = state.console,
+                    connected = state.phase == Phase.Connected,
+                    onRun = { line ->
+                        val cmd = AdbCommand.parse(line)
+                        porter.runCommand(line, cmd)
+                        when (cmd) {
+                            is AdbCommand.Install -> { typed = cmd; pickTyped.launch(arrayOf("application/vnd.android.package-archive")) }
+                            is AdbCommand.Push -> { typed = cmd; pickTyped.launch(arrayOf("*/*")) }
+                            else -> Unit
+                        }
+                    },
+                    onStop = porter::stopCommand,
+                    onClear = porter::clearConsole,
+                )
             }
 
             if (state.log.isNotEmpty()) {
@@ -248,7 +281,7 @@ internal fun PorterScreen(porter: Porter) {
 }
 
 @Composable
-private fun PairForm(host: String, onPair: (String, Int, String) -> Unit) {
+private fun PairForm(host: String, pairing: Boolean, status: String, onPair: (String, Int, String) -> Unit) {
     var pairPort by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -271,9 +304,71 @@ private fun PairForm(host: String, onPair: (String, Int, String) -> Unit) {
         }
         FilledTonalButton(
             onClick = { onPair(host, pairPort.toInt(), code) },
-            enabled = host.isNotEmpty() && (pairPort.toIntOrNull() ?: 0) in 1..65535 && code.length == 6,
+            enabled = !pairing && host.isNotEmpty() && (pairPort.toIntOrNull() ?: 0) in 1..65535 && code.length == 6,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text("Pair") }
+        ) { Text(if (pairing) "Pairing…" else "Pair") }
+        if (status.isNotEmpty()) {
+            Text(
+                status, style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    pairing -> MaterialTheme.colorScheme.onSurfaceVariant
+                    status.startsWith("Paired") -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.error
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CommandBox(console: Console, connected: Boolean, onRun: (String) -> Unit, onStop: () -> Unit, onClear: () -> Unit) {
+    var line by remember { mutableStateOf("") }
+    val run = { if (line.isNotBlank()) { onRun(line.trim()); line = "" } }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text("Commands", style = MaterialTheme.typography.titleSmall)
+        Spacer(Modifier.weight(1f))
+        TextButton(onClick = { onRun("help") }) { Text("Help") }
+        if (console.output.isNotEmpty() && !console.running) TextButton(onClick = onClear) { Text("Clear") }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = line, onValueChange = { line = it.replace("\n", "") },
+            placeholder = { Text("adb shell pm list packages", fontFamily = FontFamily.Monospace, fontSize = 14.sp) },
+            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 14.sp),
+            singleLine = true, modifier = Modifier.weight(1f),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Ascii, autoCorrectEnabled = false, imeAction = ImeAction.Send,
+            ),
+            keyboardActions = KeyboardActions(onSend = { if (!console.running) run() }),
+        )
+        if (console.running) {
+            FilledTonalButton(onClick = onStop) { Text("Stop") }
+        } else {
+            FilledTonalButton(onClick = run, enabled = line.isNotBlank()) { Text("Run") }
+        }
+    }
+    if (!connected) {
+        Text(
+            "Commands run once the port is connected. Type them as you would after adb.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (console.output.isNotEmpty()) {
+        val scroll = rememberScrollState()
+        // Follow new output, like a terminal.
+        LaunchedEffect(console.output.length) { scroll.scrollTo(scroll.maxValue) }
+        SelectionContainer {
+            Text(
+                console.output.trimEnd('\n'),
+                fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest, MaterialTheme.shapes.small)
+                    .verticalScroll(scroll)
+                    .padding(10.dp),
+            )
+        }
     }
 }
 

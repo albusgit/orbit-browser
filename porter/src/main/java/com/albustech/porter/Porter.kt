@@ -38,7 +38,14 @@ data class Transfer(
     val size: Long,
     val sent: Long = 0,
     val status: Status = Status.Waiting,
+    /** pm install options for an APK. */
+    val installOptions: List<String> = listOf("-r"),
+    /** Where a non-APK file goes on the watch. */
+    val remoteDir: String = AdbCommand.DEFAULT_PUSH_DIR,
 )
+
+/** The command box: what's been run and printed, and whether a command is still going. */
+data class Console(val output: String = "", val running: Boolean = false)
 
 data class PorterState(
     val phase: Phase = Phase.Off,
@@ -47,6 +54,10 @@ data class PorterState(
     val port: Int = 0,
     val transfers: List<Transfer> = emptyList(),
     val log: List<String> = emptyList(),
+    val console: Console = Console(),
+    /** The last pairing attempt's result, shown under the Pair button. */
+    val pairStatus: String = "",
+    val pairing: Boolean = false,
 )
 
 /**
@@ -177,16 +188,37 @@ class Porter(private val context: Context) {
 
     // --- Pairing and discovery ---
 
-    suspend fun pair(host: String, pairingPort: Int, code: String): Boolean {
-        log("Pairing with $host:$pairingPort…")
-        return try {
-            val ok = WatchAdb(keys).use { it.pair(host, pairingPort, code) }
-            if (ok) prefs.paired = true
-            log(if (ok) "Paired. Now start the port." else "Pairing failed")
-            ok
-        } catch (e: Throwable) {
-            log("Pairing failed: ${e.message ?: e.javaClass.simpleName}")
-            false
+    fun pair(host: String, pairingPort: Int, code: String) {
+        if (_state.value.pairing) return
+        setPair(true, "Pairing with $host:$pairingPort…")
+        // Off the main thread: the handshake is blocking network I/O.
+        scope.launch {
+            val result = try {
+                val ok = WatchAdb(keys).use { it.pair(host, pairingPort, code) }
+                if (ok) prefs.paired = true
+                if (ok) "Paired. Now tap Start port (it uses the other port, on the main Wireless debugging screen)."
+                else "The watch turned the pairing down. Check the code and try again."
+            } catch (e: Throwable) {
+                pairingError(e, host, pairingPort)
+            }
+            log(result)
+            setPair(false, result)
+        }
+    }
+
+    private fun setPair(running: Boolean, status: String) = _state.update { it.copy(pairing = running, pairStatus = status) }
+
+    private fun pairingError(e: Throwable, host: String, port: Int): String {
+        val root = generateSequence(e) { it.cause }.last()
+        return when (root) {
+            is java.net.ConnectException, is java.net.NoRouteToHostException ->
+                "Couldn't reach $host:$port. Keep the watch's Pair new device screen open, and use the " +
+                    "pairing port shown there (not the main Wireless debugging port)."
+            is java.net.SocketTimeoutException -> "$host:$port didn't answer. Are the phone and watch on the same Wi-Fi?"
+            is java.io.EOFException, is javax.net.ssl.SSLException ->
+                "The watch ended the pairing. The code is probably wrong or expired: open Pair new device again for a new one."
+            else -> "Pairing failed: " + generateSequence(e) { it.cause }
+                .joinToString(" ← ") { it.message ?: it.javaClass.simpleName }
         }
     }
 
@@ -223,12 +255,21 @@ class Porter(private val context: Context) {
 
     // --- Files ---
 
-    fun enqueue(uris: List<Uri>) {
+    /**
+     * Queues files for the watch. APKs are installed unless [push] (then everything is copied);
+     * [installOptions] and [remoteDir] come from typed `install` and `push` commands.
+     */
+    fun enqueue(
+        uris: List<Uri>,
+        installOptions: List<String> = listOf("-r"),
+        remoteDir: String = AdbCommand.DEFAULT_PUSH_DIR,
+        push: Boolean = false,
+    ) {
         for (uri in uris) {
             val (name, size) = describe(uri)
-            val isApk = name.endsWith(".apk", ignoreCase = true) ||
-                context.contentResolver.getType(uri) == "application/vnd.android.package-archive"
-            val t = Transfer(nextId++, name, isApk, size)
+            val isApk = !push && (name.endsWith(".apk", ignoreCase = true) ||
+                context.contentResolver.getType(uri) == "application/vnd.android.package-archive")
+            val t = Transfer(nextId++, name, isApk, size, installOptions = installOptions, remoteDir = remoteDir)
             _state.update { it.copy(transfers = it.transfers + t) }
             jobs.trySend(t to uri)
         }
@@ -278,17 +319,17 @@ class Porter(private val context: Context) {
     private fun send(conn: WatchAdb, t: Transfer, uri: Uri): String {
         val progress = { sent: Long -> setTransfer(t.id) { it.copy(sent = sent) } }
         if (!t.isApk) {
-            val remote = "/sdcard/Download/${t.name.replace('/', '_')}"
+            val remote = "${t.remoteDir.trimEnd('/')}/${t.name.replace('/', '_')}"
             open(uri).use { conn.push(remote, (System.currentTimeMillis() / 1000).toInt(), it, progress) }
             return "saved to $remote"
         }
-        if (t.size >= 0) return open(uri).use { conn.install(t.size, it, progress) }
+        if (t.size >= 0) return open(uri).use { conn.install(t.size, t.installOptions, it, progress) }
         // pm needs the size up front: copy to a temp file when the provider doesn't say.
         val tmp = File.createTempFile("install", ".apk", context.cacheDir)
         try {
             open(uri).use { input -> tmp.outputStream().use { input.copyTo(it) } }
             setTransfer(t.id) { it.copy(size = tmp.length()) }
-            return tmp.inputStream().buffered(256 * 1024).use { conn.install(tmp.length(), it, progress) }
+            return tmp.inputStream().buffered(256 * 1024).use { conn.install(tmp.length(), t.installOptions, it, progress) }
         } finally {
             tmp.delete()
         }
@@ -310,6 +351,58 @@ class Porter(private val context: Context) {
             size = runCatching { context.contentResolver.openAssetFileDescriptor(uri, "r")!!.use { it.length } }.getOrDefault(-1L)
         }
         return name.substringAfterLast('/') to size
+    }
+
+    // --- Command box ---
+
+    private var command: Job? = null
+
+    /** Runs a typed command (see [AdbCommand]) and streams what it prints into the console. */
+    fun runCommand(line: String, cmd: AdbCommand) {
+        if (command?.isActive == true) return
+        echo("> $line\n")
+        when (cmd) {
+            is AdbCommand.Help -> echo(AdbCommand.HELP + "\n")
+            is AdbCommand.Invalid -> echo(cmd.message + "\n")
+            is AdbCommand.Devices -> {
+                val s = _state.value
+                echo(if (s.phase == Phase.Connected) "${s.host}:${s.port}\tdevice\n" else "No watch connected. Tap Start port first.\n")
+            }
+            // The screen opens the file picker; the picked files join the queue.
+            is AdbCommand.Install -> echo("Pick the APKs to install…\n")
+            is AdbCommand.Push -> echo("Pick the files to copy to ${cmd.remoteDir}…\n")
+            is AdbCommand.Service -> {
+                val conn = adb
+                if (conn == null || _state.value.phase != Phase.Connected) {
+                    echo("No watch connected. Tap Start port first.\n")
+                    return
+                }
+                _state.update { it.copy(console = it.console.copy(running = true)) }
+                command = scope.launch {
+                    try {
+                        runInterruptible { conn.stream(cmd.service) { echo(it.replace("\r\n", "\n")) } }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        echo("\n[stopped]\n")
+                    } catch (e: Throwable) {
+                        echo("\nerror: ${e.message ?: e.javaClass.simpleName}\n")
+                    } finally {
+                        _state.update { it.copy(console = it.console.copy(running = false)) }
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopCommand() {
+        command?.cancel()
+    }
+
+    fun clearConsole() = _state.update { it.copy(console = it.console.copy(output = "")) }
+
+    /** Appends to the console, keeping the last 64k characters (logcat can run all day). */
+    fun echo(text: String) = _state.update {
+        val out = (it.console.output + text).let { o -> if (o.length > 65_536) o.substring(o.length - 65_536) else o }
+        it.copy(console = it.console.copy(output = out))
     }
 
     // --- State helpers ---

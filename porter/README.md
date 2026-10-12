@@ -15,6 +15,11 @@ port that `adb connect` uses. It does four things:
 - **Sends files.** "Send file" copies any file to the watch's `Download` folder (`adb push`).
   You can also share files to Porter from another app.
 
+- **Runs adb commands.** Type in the Commands box as you would after `adb`, with or without the
+  `adb` prefix: `shell <cmd>`, `install [-r -d -t -g]` and `push [dir]` (both open the file
+  picker), `uninstall`, `reboot`, `logcat`, `devices` and `help`. Anything else runs as a shell
+  command on the watch. Output streams live, and Stop ends long-running commands like `logcat`.
+
 Files picked before the port starts wait until it's connected. If the connection drops during a
 transfer, Porter retries it once after reconnecting.
 

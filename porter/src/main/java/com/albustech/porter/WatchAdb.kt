@@ -27,11 +27,38 @@ class WatchAdb(private val keys: AdbKeys) : AbsAdbConnectionManager() {
     fun exec(command: String): String = openStream("exec:$command").use { readAll(it) }
 
     /**
+     * Opens an ADB service (such as "shell:ls") and hands its output to [onOutput] as it arrives,
+     * until the watch closes it. Interrupting the thread ends it early.
+     */
+    fun stream(service: String, onOutput: (String) -> Unit) {
+        openStream(service).use { stream ->
+            val buf = ByteArray(16 * 1024)
+            val decoder = Charsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE)
+            val bytes = java.nio.ByteBuffer.allocate(buf.size + 8)
+            val chars = java.nio.CharBuffer.allocate(buf.size + 8)
+            while (true) {
+                if (Thread.interrupted()) throw InterruptedException()
+                val n = try { stream.read(buf, 0, buf.size) } catch (e: IOException) { if (stream.isClosed) -1 else throw e }
+                if (n < 0) break
+                // Decode across chunk edges so multi-byte characters aren't split.
+                bytes.put(buf, 0, n).flip()
+                decoder.decode(bytes, chars, false)
+                bytes.compact()
+                chars.flip()
+                if (chars.hasRemaining()) onOutput(chars.toString())
+                chars.clear()
+            }
+        }
+    }
+
+    /**
      * Streams an APK into `pm install` (no copy left on the watch). [onProgress] gets bytes sent.
      * Returns pm's output; it starts with "Success" when the install worked.
      */
-    fun install(size: Long, input: InputStream, onProgress: (Long) -> Unit): String =
-        openStream("exec:cmd package install -r -S $size").use { stream ->
+    fun install(size: Long, options: List<String>, input: InputStream, onProgress: (Long) -> Unit): String =
+        openStream("exec:cmd package install ${options.joinToString(" ")} -S $size").use { stream ->
             copy(input, stream, onProgress)
             stream.flush()
             readAll(stream).trim()
