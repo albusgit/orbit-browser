@@ -240,7 +240,7 @@ internal fun PorterScreen(porter: Porter) {
                     else "Files you pick wait here until the port starts.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                state.transfers.forEach { TransferRow(it) }
+                state.transfers.forEach { TransferRow(it, porter::openOnWatch) }
             }
 
             Section {
@@ -385,14 +385,18 @@ private fun CommandBox(console: Console, connected: Boolean, onRun: (String) -> 
 }
 
 @Composable
-private fun TransferRow(t: Transfer) {
+private fun TransferRow(t: Transfer, onOpen: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(t.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.width(8.dp))
             val label = when (t.status) {
                 Status.Waiting -> "Waiting"
-                Status.Sending -> if (t.size > 0) "${(t.sent * 100 / t.size).coerceIn(0, 100)}%" else "Sending"
+                Status.Sending -> when {
+                    t.installing -> "Installing on watch…"
+                    t.size > 0 -> "${(t.sent * 100 / t.size).coerceIn(0, 100)}%"
+                    else -> "Sending"
+                }
                 Status.Done -> if (t.isApk) "Installed" else "Sent"
                 Status.Failed -> "Failed"
             }
@@ -403,11 +407,28 @@ private fun TransferRow(t: Transfer) {
             }
             Text(label, style = MaterialTheme.typography.labelMedium, color = color)
         }
-        when (t.status) {
-            Status.Sending ->
-                if (t.size > 0) LinearProgressIndicator(progress = { t.sent.toFloat() / t.size }, modifier = Modifier.fillMaxWidth())
-                else LinearProgressIndicator(Modifier.fillMaxWidth())
-            else -> Unit
+        when {
+            t.status != Status.Sending -> Unit
+            // pm gives no progress while it installs: show that it's busy.
+            t.installing || t.size <= 0 -> LinearProgressIndicator(Modifier.fillMaxWidth())
+            else -> LinearProgressIndicator(progress = { t.sent.toFloat() / t.size }, modifier = Modifier.fillMaxWidth())
+        }
+        if (t.installing) {
+            Text(
+                "Sent. The watch is installing it now; large apps take a few minutes.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (t.detail.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    t.detail, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+                    color = if (t.status == Status.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (t.status == Status.Done && t.pkg != null) {
+                    TextButton(onClick = { onOpen(t.pkg) }) { Text("Open on watch") }
+                }
+            }
         }
     }
 }

@@ -43,7 +43,14 @@ data class Transfer(
     val installOptions: List<String> = listOf("-r"),
     /** Where a non-APK file goes on the watch. */
     val remoteDir: String = AdbCommand.DEFAULT_PUSH_DIR,
-)
+    /** The APK's package, read on the phone before sending (null if it couldn't be read). */
+    val pkg: String? = null,
+    /** The outcome in words: the version now on the watch, or why it failed. */
+    val detail: String = "",
+) {
+    /** All bytes are on the watch and pm is installing them (minutes for a large APK). */
+    val installing get() = isApk && status == Status.Sending && size > 0 && sent >= size
+}
 
 /** The command box: what's been run and printed, and whether a command is still going. */
 data class Console(val output: String = "", val running: Boolean = false)
@@ -282,12 +289,24 @@ class Porter(private val context: Context) {
                     delay(500)
                     continue
                 }
-                setTransfer(t.id) { it.copy(status = Status.Sending, sent = 0) }
+                setTransfer(t.id) { it.copy(status = Status.Sending, sent = 0, detail = "") }
                 try {
                     val result = runInterruptible { send(conn, t, uri) }
-                    val ok = !t.isApk || result.startsWith("Success")
-                    setTransfer(t.id) { it.copy(status = if (ok) Status.Done else Status.Failed) }
-                    log("${t.name}: ${if (t.isApk && ok) "installed" else result}")
+                    if (!t.isApk) {
+                        setTransfer(t.id) { it.copy(status = Status.Done, detail = result) }
+                        log("${t.name}: $result")
+                    } else if (result.startsWith("Success")) {
+                        // pm said Success; ask the watch what it now has, as proof.
+                        val pkg = _state.value.transfers.first { it.id == t.id }.pkg
+                        val detail = pkg?.let { runCatching { runInterruptible { installedVersion(conn, it) } }.getOrNull() }
+                            ?: "pm: Success"
+                        setTransfer(t.id) { it.copy(status = Status.Done, detail = detail) }
+                        log("${t.name}: installed ($detail)")
+                    } else {
+                        val why = result.ifBlank { "pm gave no answer" }
+                        setTransfer(t.id) { it.copy(status = Status.Failed, detail = explainInstall(why)) }
+                        log("${t.name}: $why")
+                    }
                     break
                 } catch (e: Throwable) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -300,8 +319,9 @@ class Porter(private val context: Context) {
                         delay(1_000)
                         continue
                     }
-                    setTransfer(t.id) { it.copy(status = Status.Failed) }
-                    log("${t.name}: ${e.message ?: e.javaClass.simpleName}")
+                    val why = Diagnose.chain(e)
+                    setTransfer(t.id) { it.copy(status = Status.Failed, detail = why) }
+                    log("${t.name}: $why")
                     break
                 }
             }
@@ -315,6 +335,7 @@ class Porter(private val context: Context) {
             open(uri).use { conn.push(remote, (System.currentTimeMillis() / 1000).toInt(), it, progress) }
             return "saved to $remote"
         }
+        readPackage(uri)?.let { pkg -> setTransfer(t.id) { it.copy(pkg = pkg) } }
         if (t.size >= 0) return open(uri).use { conn.install(t.size, t.installOptions, it, progress) }
         // pm needs the size up front: copy to a temp file when the provider doesn't say.
         val tmp = File.createTempFile("install", ".apk", context.cacheDir)
@@ -329,6 +350,53 @@ class Porter(private val context: Context) {
 
     private fun open(uri: Uri) =
         (context.contentResolver.openInputStream(uri) ?: throw java.io.IOException("Can't open the file")).buffered(256 * 1024)
+
+    /** The APK's package name, read from its manifest on the phone. */
+    private fun readPackage(uri: Uri): String? = runCatching {
+        context.contentResolver.openFileDescriptor(uri, "r")!!.use { fd ->
+            // PackageManager wants a path; the open descriptor gives one for any provider.
+            @Suppress("DEPRECATION")
+            context.packageManager.getPackageArchiveInfo("/proc/self/fd/${fd.fd}", 0)?.packageName
+        }
+    }.getOrNull()
+
+    /** "com.example 1.2 (12), updated 10:42": what the watch reports for [pkg]. */
+    private fun installedVersion(conn: WatchAdb, pkg: String): String? {
+        val dump = conn.exec("dumpsys package $pkg")
+        fun field(name: String) = Regex("""\b$name=(\S+)""").find(dump)?.groupValues?.get(1)
+        val version = field("versionName") ?: return null
+        val code = field("versionCode")
+        val updated = Regex("""lastUpdateTime=\S+ (\d\d:\d\d)""").find(dump)?.groupValues?.get(1)
+        return buildString {
+            append("$pkg $version")
+            if (code != null) append(" ($code)")
+            if (updated != null) append(", updated $updated")
+        }
+    }
+
+    /** pm's failure codes, with the usual fix. */
+    private fun explainInstall(pm: String): String {
+        val hint = when {
+            "NO_MATCHING_ABIS" in pm -> "This APK isn't built for the watch's processor."
+            "UPDATE_INCOMPATIBLE" in pm -> "A copy signed with a different key is installed: uninstall it first."
+            "VERSION_DOWNGRADE" in pm -> "The watch has a newer version: type install -r -d to allow going back."
+            "INSUFFICIENT_STORAGE" in pm -> "The watch is out of space."
+            "TEST_ONLY" in pm -> "This is a test build: type install -r -t to allow it."
+            "OLDER_SDK" in pm || "DEPRECATED_SDK" in pm -> "The watch's Android is too old for this APK."
+            else -> null
+        }
+        return if (hint == null) pm else "$hint ($pm)"
+    }
+
+    /** Starts an installed app on the watch. */
+    fun openOnWatch(pkg: String) {
+        val conn = adb ?: return log("Not connected")
+        scope.launch {
+            runCatching { conn.exec("monkey -p $pkg -c android.intent.category.LAUNCHER 1") }
+                .onSuccess { log("Opened $pkg on the watch") }
+                .onFailure { log("Couldn't open $pkg: ${Diagnose.chain(it)}") }
+        }
+    }
 
     private fun describe(uri: Uri): Pair<String, Long> {
         var name = uri.lastPathSegment ?: "file"

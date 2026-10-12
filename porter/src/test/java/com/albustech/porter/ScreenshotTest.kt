@@ -28,7 +28,12 @@ class ScreenshotTest {
             phase = Phase.Connected, host = "192.168.1.50", port = 41234,
             transfers = listOf(
                 Transfer(1, "orbit-0.5.0.apk", isApk = true, size = 88_000_000, sent = 52_000_000, status = Status.Sending),
-                Transfer(2, "notes.txt", isApk = false, size = 1200, sent = 1200, status = Status.Done),
+                // No "installing" row: its indeterminate bar never goes idle, so the capture would wait forever.
+                Transfer(3, "orbit-0.3.0.apk", isApk = true, size = 80, sent = 80, status = Status.Done,
+                    pkg = "com.albustech.orbit", detail = "com.albustech.orbit 0.3.0 (6), updated 10:42"),
+                Transfer(4, "old.apk", isApk = true, size = 80, sent = 80, status = Status.Failed,
+                    detail = "A copy signed with a different key is installed: uninstall it first. (Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE])"),
+                Transfer(5, "notes.txt", isApk = false, size = 1200, sent = 1200, status = Status.Done, detail = "saved to /sdcard/Download/notes.txt"),
             ),
             console = Console(
                 output = "> adb shell getprop ro.product.model\nSM-R960\n> uninstall com.example.old\nSuccess\n",
