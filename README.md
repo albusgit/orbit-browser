@@ -7,10 +7,18 @@ Other Wear OS browsers show a rectangular phone page through a round hole. Orbit
 circle as the layout surface. Text stays inside the circle, the chrome follows the curved
 edge, and the bezel is the main control.
 
-**Engine: GeckoView** (Firefox's engine, bundled), with the **real uBlock Origin** built in.
-Wear OS ships no WebView: the Watch6 Classic has none, and the Play Store won't install it on
-watches. So Orbit brings its own engine, which makes it run on any Wear OS watch. See
-[The engine](#the-engine-geckoview).
+**The phone does the heavy lifting (0.6.0).** With the small **Orbit Phone** helper installed
+on the paired Android phone, the phone loads each page in Chrome's engine at the watch's size,
+blocks ads with EasyList and EasyPrivacy, and sends the finished page as picture strips. The
+watch only scrolls pictures, so pages look exactly like the real site, appear in a few seconds
+and scroll smoothly. See [Phone helper](#phone-helper).
+
+**Watch engine: GeckoView** (Firefox's engine, bundled), started only when a page needs it:
+no phone nearby, pages that must stay live (video, maps, games), sites you move to the watch,
+and Reader. Its tracking protection is set to strict, and the **real uBlock Origin** is built
+in as an opt-in (Settings → Stronger blocking). Wear OS ships no WebView: the Watch6 Classic
+has none, and the Play Store won't install it on watches. So Orbit brings its own engine,
+which makes it run on any Wear OS watch. See [The engine](#the-engine-geckoview).
 
 **Status: all four phases are built, plus the round-native redesign and the GeckoView engine.**
 The app builds (debug and minified release). Unit tests, lint, the Robolectric screenshot
@@ -20,6 +28,47 @@ In particular, Gecko-specific behaviour is unverified until it runs on the watch
 [Testing on a device](#testing-on-a-device).
 
 ---
+
+## Phone helper
+
+**Install both APKs from the same release.** They share an app ID and signing key, which is
+how they find each other over the Wear Data Layer (and why nothing else can talk to them).
+
+```sh
+adb -s <phone> install -r Orbit-Phone-0.6.0.apk      # the phone (Android 10+)
+adb -s <watch-ip>:<port> install -r Orbit-0.6.0.apk  # the watch
+```
+
+Open **Orbit Phone** once on the phone and tap **Allow in background**. Android only lets a
+helper start from the background when it is exempt from battery optimisation; without that,
+the watch says so and loads pages itself.
+
+How a page travels:
+
+| Step | Where | What |
+|---|---|---|
+| 1 | watch | `loadUrl` sends the address, the View (Mobile 1×, Compact 360 CSS px, Desktop 980 CSS px at 2×) and the screen size |
+| 2 | phone | A WebView on a private virtual display the watch's size loads it. EasyList and EasyPrivacy block requests (`shouldInterceptRequest`) and hide ad slots (`cosmetic.js`) |
+| 3 | phone | At first paint, screen 1 is captured and sent as a WebP strip (about 10–30 KB) with the page map (`map.js`: links, buttons and fields with their boxes). Three more screens follow, then more as you scroll |
+| 4 | watch | `TilePage` draws the strips. Scrolling, the bezel, zoom and link mode all run locally. Taps go to the phone, which taps the real page and sends back only the strips that changed |
+| 5 | watch | A field tapped on the phone page opens the watch keyboard; the text goes back with Enter |
+
+Results pages are still read by `serp.js` (on the phone) and shown as native cards. Reader runs
+Readability on the phone and shows the article in the watch's reader. If the phone doesn't
+answer within 8 s, or the page is mostly video, a map or a game, the watch's own engine takes
+over; **More → On watch / Via phone** switches by hand, and **Settings → Load through phone**
+turns the helper off.
+
+Measured in the build container with the same viewport, map script and EasyList host rules
+(Chromium standing in for the phone's WebView):
+
+| Page | Downloaded on the phone | Height | First strip | Average strip |
+|---|---|---|---|---|
+| Wikipedia, *Wear OS* | 1.9 MB | 19 screens | 9 KB | 16 KB |
+| BBC News | 6.3 MB (16 requests blocked) | 58 screens | 11 KB | 16 KB |
+| The Verge | 13.1 MB (19 blocked) | 54 screens | 32 KB | 16 KB |
+
+So the watch receives tens of kilobytes per screen instead of megabytes per page.
 
 ## What it does
 
@@ -34,7 +83,7 @@ View (**More → View**: Auto → Reader → Compact → Desktop → Mobile) is 
 | **Mobile** (default) | The site's own **mobile version**, exactly as a phone would show it: Gecko's mobile user agent and viewport, nothing restyled. Pinch zooms. |
 | **Compact** | The mobile version laid out at a phone's width (360 CSS px) and scaled to fit, so more of the page shows at once (`compact.js` rewrites the page's viewport at document start). |
 | **Desktop** | The site's desktop version (desktop user agent and width) in overview. Pinch zooms, or pick *Zoom* in the mode bar to zoom with the bezel. Double-tap zooms the tapped block. |
-| **Reader** | Articles on sites left on *Auto*, or forced with *Reader*: Mozilla Readability extracts the article, then Orbit sets it as **circular pages**: two floats whose `shape-outside` polygons cover everything outside the circle, so lines are short at the top and bottom and full width in the middle. Each bezel click turns one page, with a dial-swing animation and a haptic tick. Images get their own page, scaled into the inscribed square. Tables and code get a page whose square scrolls. A progress arc runs around the rim, and "4 / 12" appears for a moment at the bottom. Pure `#000` background. |
+| **Reader** | Articles on sites set to *Reader* (More → View; since 0.6.0 it no longer runs on every page): Mozilla Readability extracts the article, then Orbit sets it as **circular pages**: two floats whose `shape-outside` polygons cover everything outside the circle, so lines are short at the top and bottom and full width in the middle. Each bezel click turns one page, with a dial-swing animation and a haptic tick. Images get their own page, scaled into the inscribed square. Tables and code get a page whose square scrolls. A progress arc runs around the rim, and "4 / 12" appears for a moment at the bottom. Pure `#000` background. |
 
 The old Round fit layout (`round.js`) is no longer used by the app; it stays as the harness the
 reader and link checks run in.
@@ -380,7 +429,8 @@ three densities, and write screenshots with a circle mask to `./out`. Latest res
 
 | Page | Check |
 |---|---|
-| A long Wikipedia article (`en.wikipedia.org/wiki/Orbital_mechanics`) | Reader opens automatically, pages turn per bezel click without lag, "n / N" label, Text size keeps the position, reopening restores the page |
+| Any page with the phone nearby | It appears in a few seconds and looks like the site on a phone; bezel scrolling is smooth; taps on links, buttons and fields work; Back is instant to the page before |
+| A long Wikipedia article (`en.wikipedia.org/wiki/Orbital_mechanics`) | With the site set to Reader: Reader opens, pages turn per bezel click without lag, "n / N" label, Text size keeps the position, reopening restores the page |
 | A Google, DuckDuckGo and Bing search | Result cards appear (not the page); the bezel snaps card to card; Open goes to the site directly; Back returns to the same card. **Google can't be checked live from the build machine**, so check it here first. |
 | A news site full of ads | Blocked count in the More ring, ad slots hidden rather than left blank, Reader skips the clutter, memory stays flat |
 | Hacker News (`news.ycombinator.com`) | Mobile version renders; in Round fit, no clipping; link mode steps in reading order; the *Open link* pill opens the focused link |
@@ -397,7 +447,7 @@ Also check on both sizes:
 
 ### Known limitations
 
-- **Mid-scroll clipping in Round fit.** While scrolling, lines passing the top and bottom bands are partly clipped; the rim vignette fades that band on purpose. Text never clips at rest at the top or bottom of the page. Reader mode has no such band.
+- **Mid-scroll clipping in Round fit.** While scrolling, lines passing the top and bottom bands are partly clipped. Text never clips at rest at the top or bottom of the page. Reader mode has no such band.
 - **Positioned elements.** Only shallow fixed and sticky elements go back into the flow, to keep the pass cheap.
 - **Pages with JavaScript turned off** (per-site toggle) get neither the round layout nor Reader nor link focus, because all three are injected JS.
 - **No live suggestions while typing.** Wear keyboards are full-screen, so suggestions appear when the keyboard closes. Inside the keyboard, recent sites are offered as quick choices.

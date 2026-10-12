@@ -9,7 +9,7 @@ data class PageError(
     val detail: String,
     val connection: ConnectionType,
 ) {
-    enum class Kind { OFFLINE, TIMEOUT, HOST, SECURITY, HTTP, OTHER }
+    enum class Kind { OFFLINE, TIMEOUT, HOST, SECURITY, HTTP, OTHER, ENGINE }
 
     /** Short title and a sentence of advice, tuned for how the watch is connected. */
     fun message(): Pair<String, String> {
@@ -28,6 +28,7 @@ data class PageError(
             Kind.SECURITY -> "Not secure" to "The site's security certificate isn't valid, so Orbit didn't open it."
             Kind.HTTP -> "Page unavailable" to detail
             Kind.OTHER -> "Can't load page" to detail
+            Kind.ENGINE -> "Engine couldn't start" to "Orbit's web engine failed to start on this watch. Close Orbit and open it again."
         }
     }
 

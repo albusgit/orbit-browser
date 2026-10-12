@@ -35,7 +35,7 @@ private const val REMOTE_INPUT_KEY = "orbit_url"
  *   familiar site is one tap even before typing.
  */
 @Composable
-fun rememberUrlEntry(choices: List<String> = emptyList(), onText: (String) -> Unit): UrlEntry {
+fun rememberUrlEntry(choices: List<String> = emptyList(), label: Int = R.string.keyboard_label, onText: (String) -> Unit): UrlEntry {
     val context = LocalContext.current
     val currentOnText by rememberUpdatedState(onText)
     val currentChoices by rememberUpdatedState(choices)
@@ -54,7 +54,7 @@ fun rememberUrlEntry(choices: List<String> = emptyList(), onText: (String) -> Un
     }
 
     return remember(context) {
-        val typeAction = { _: String? -> keyboard.launch(keyboardIntent(context, currentChoices)) }
+        val typeAction = { _: String? -> keyboard.launch(keyboardIntent(context, currentChoices, label)) }
         UrlEntry(
             speakAction = {
                 try {
@@ -75,9 +75,9 @@ private fun voiceIntent(context: Context) =
         .putExtra(RecognizerIntent.EXTRA_PROMPT, context.getString(R.string.voice_prompt))
         .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
 
-private fun keyboardIntent(context: Context, choices: List<String>): Intent {
+private fun keyboardIntent(context: Context, choices: List<String>, label: Int): Intent {
     val input = RemoteInput.Builder(REMOTE_INPUT_KEY)
-        .setLabel(context.getString(R.string.keyboard_label))
+        .setLabel(context.getString(label))
         .setChoices(choices.take(5).toTypedArray<CharSequence>())
         .setAllowFreeFormInput(true)
         .wearableExtender {

@@ -5,11 +5,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -17,18 +15,12 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.MaterialTheme
 
-/** Fraction of the radius where the rim fade begins. */
-private const val VIGNETTE_START = 0.86f
-
-/** Opacity of the fade at the rim. */
-private const val VIGNETTE_ALPHA = 0.9f
-
 /** Scroll arc: upper right, where the thumb doesn't cover it (centred on 1:30). */
 private const val SCROLL_ARC_CENTER = -45f
 private const val SCROLL_ARC = 50f
 private const val SCROLL_THUMB = 12f
 
-/** What the edge shows besides the vignette. */
+/** What the edge shows besides the loading ring. */
 sealed interface EdgeIndicator {
     data object None : EdgeIndicator
 
@@ -40,8 +32,8 @@ sealed interface EdgeIndicator {
 }
 
 /**
- * Drawn over the page: a radial vignette so content meeting the rim fades out on purpose,
- * a thin loading ring around the whole edge while loading, and the position indicator.
+ * Drawn over the page: a thin loading ring around the whole edge while loading, and the
+ * position indicator. (No full-screen vignette: it was a gradient blended over every frame.)
  *
  * Progress and position are read through lambdas inside the draw phase: scrolling and loading
  * redraw this one canvas without recomposing the screen.
@@ -57,20 +49,10 @@ fun EdgeOverlay(
     val accent = MaterialTheme.colorScheme.primary
     val track = MaterialTheme.colorScheme.outlineVariant
     val indicatorAlpha by animateFloatAsState(if (indicatorVisible) 1f else 0.35f, label = "indicator")
-    val vignette = remember(geometry) {
-        Brush.radialGradient(
-            0f to Color.Transparent,
-            VIGNETTE_START to Color.Transparent,
-            1f to Color.Black.copy(alpha = VIGNETTE_ALPHA),
-            center = Offset(geometry.centerXPx, geometry.centerYPx),
-            radius = geometry.radiusPx,
-        )
-    }
 
     Canvas(modifier.fillMaxSize()) {
         val center = Offset(geometry.centerXPx, geometry.centerYPx)
         val radius = geometry.radiusPx
-        drawRect(vignette)
 
         val loading = loadingProgress()
         val thin = 2.dp.toPx()

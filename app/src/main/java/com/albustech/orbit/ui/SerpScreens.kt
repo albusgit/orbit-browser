@@ -81,7 +81,8 @@ private sealed interface SerpCard {
 
 private fun cardsOf(data: SerpData): List<SerpCard> = buildList {
     val first = data.results.firstOrNull()
-    if (!data.answer.isNullOrBlank() && data.answer != first?.snippet) add(SerpCard.Answer(data.answer, first))
+    val answer = data.answer
+    if (!answer.isNullOrBlank() && answer != first?.snippet) add(SerpCard.Answer(answer, first))
     data.results.forEachIndexed { i, r -> add(SerpCard.Result(r, i + 1)) }
     data.nextUrl?.let { add(SerpCard.More(it)) }
 }

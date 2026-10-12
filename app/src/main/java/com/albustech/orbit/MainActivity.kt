@@ -7,7 +7,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.util.Log
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Toast
@@ -28,6 +27,7 @@ import com.albustech.orbit.browser.BrowserHost
 import com.albustech.orbit.browser.ConnectionMonitor
 import com.albustech.orbit.browser.MemoryLog
 import com.albustech.orbit.browser.OrbitRuntime
+import com.albustech.orbit.browser.PhoneLink
 import com.albustech.orbit.browser.TabManager
 import com.albustech.orbit.data.ReaderStyle
 import com.albustech.orbit.data.Settings
@@ -35,7 +35,6 @@ import com.albustech.orbit.input.BezelInput
 import com.albustech.orbit.tile.OrbitTileService
 import com.albustech.orbit.ui.AppActions
 import com.albustech.orbit.ui.BrowserScreen
-import com.albustech.orbit.ui.ErrorScreen
 import com.albustech.orbit.ui.OrbitDeps
 import com.albustech.orbit.ui.RoundGeometry
 import kotlinx.coroutines.launch
@@ -51,6 +50,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
     private var controller: BrowserController? = null
     private var tabs: TabManager? = null
     private var bezel: BezelInput? = null
+    private var phoneLink: PhoneLink? = null
     private var ambient by mutableStateOf(false)
     private var keepScreenOn = false
 
@@ -79,23 +79,13 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         val geometry = currentGeometry()
         lifecycle.addObserver(ambientObserver)
 
-        val runtime = try {
-            OrbitRuntime.get(this)
-        } catch (e: Throwable) {
-            // Gecko's native libraries failed to load (wrong ABI, damaged install).
-            Log.e("OrbitGecko", "Engine failed to start", e)
-            setContent {
-                OrbitTheme {
-                    ErrorScreen(geometry, getString(R.string.error_engine), detail = e.javaClass.simpleName, onRetry = ::recreate)
-                }
-            }
-            return
-        }
-
         val connection = ConnectionMonitor(this)
+        val phone = PhoneLink(this).also { it.start() }
+        phoneLink = phone
         val browser = BrowserController(
             context = this,
-            runtime = runtime,
+            // Gecko starts with the first page the watch renders itself, not with the app.
+            runtime = { OrbitRuntime.get(this) },
             extension = OrbitRuntime.extension,
             geometry = geometry,
             repo = app.repository,
@@ -103,6 +93,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
             memoryLog = MemoryLog(this, lifecycleScope),
             connection = connection,
             host = this,
+            phone = phone,
         )
         controller = browser
         val tabManager = TabManager(this, app.database.tabs(), lifecycleScope, browser)
@@ -118,7 +109,9 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
                 browser.readerStyle = s.reader
                 browser.setBlocking(s.blockTrackers)
                 browser.setDefaultView(s.defaultView)
-                runtime.settings.fontSizeFactor = s.textZoom / 100f
+                browser.usePhone = s.phonePages
+                browser.textZoom = s.textZoom
+                OrbitRuntime.setFontSizeFactor(s.textZoom / 100f)
                 keepScreenOn = s.keepScreenOn
                 if (!keepScreenOn) releaseScreen.run()
             }
@@ -127,7 +120,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
         val restored = savedInstanceState?.let(browser::restoreState) ?: false
         if (!restored) intent?.let(::handleIntent)
 
-        val deps = OrbitDeps(browser, input, tabManager, app.repository, app.settings, geometry, connection, this)
+        val deps = OrbitDeps(browser, input, tabManager, app.repository, app.settings, geometry, connection, this, phone)
         setContent {
             val settings by app.settings.settings.collectAsStateWithLifecycle(initialValue = Settings())
             OrbitTheme {
@@ -176,6 +169,7 @@ class MainActivity : ComponentActivity(), BrowserHost, AppActions {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         bezel?.detach()
+        phoneLink?.stop()
         controller?.let {
             (it.view.parent as? ViewGroup)?.removeView(it.view)
             it.destroy()

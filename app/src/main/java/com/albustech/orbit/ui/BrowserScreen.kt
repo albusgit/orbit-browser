@@ -41,6 +41,7 @@ import com.albustech.orbit.browser.BezelMode
 import com.albustech.orbit.browser.BrowserController
 import com.albustech.orbit.browser.ConnectionMonitor
 import com.albustech.orbit.browser.ConnectionType
+import com.albustech.orbit.browser.PhoneLink
 import com.albustech.orbit.browser.TabManager
 import com.albustech.orbit.data.BrowserRepository
 import com.albustech.orbit.data.Settings
@@ -50,6 +51,7 @@ import com.albustech.orbit.data.db.Bookmark
 import com.albustech.orbit.data.db.HistoryEntry
 import com.albustech.orbit.data.db.SiteMode
 import com.albustech.orbit.input.BezelInput
+import com.albustech.orbit.link.Box
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -74,6 +76,7 @@ class OrbitDeps(
     val geometry: RoundGeometry,
     val connection: ConnectionMonitor,
     val actions: AppActions,
+    val phone: PhoneLink,
 )
 
 /** Screens that open over the page. Back (or a swipe on the rings) closes the top one. */
@@ -125,6 +128,7 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
         .collectAsState(initial = false)
     val serp = c.serp
     val onPage = c.hasPage && serp == null
+    val phonePage = c.phonePage?.takeIf { c.readerUrl == null }
 
     fun show(text: String?) {
         label = text
@@ -196,6 +200,15 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
     BackHandler(enabled = overlays.isNotEmpty()) { overlays.removeAt(overlays.lastIndex) }
 
     val entry = rememberUrlEntry(choices = bookmarks.take(5).map { Suggestions.displayUrl(it.url) }) { open(it) }
+    // A field on a phone-rendered page took focus: type into it with the watch keyboard.
+    val fieldEntry = rememberUrlEntry(label = R.string.field_label) { c.typeIntoPage(it) }
+    val field = c.fieldFocus
+    LaunchedEffect(field) {
+        if (field != null) {
+            c.consumeFieldFocus()
+            fieldEntry.type()
+        }
+    }
     val linkMode = onPage && c.bezelMode == BezelMode.LINKS && overlays.isEmpty()
     val top = overlays.lastOrNull()
     val listOverlay = top != null && top !is Overlay.Ring && top !is Overlay.More && top !is Overlay.TextSize
@@ -221,9 +234,29 @@ fun BrowserScreen(deps: OrbitDeps, settings: Settings, ambient: Boolean) {
         ) {
             AndroidView(
                 factory = { c.view.also { (it.parent as? ViewGroup)?.removeView(it) } },
-                update = { it.visibility = if (onPage) View.VISIBLE else View.INVISIBLE },
+                update = { it.visibility = if (onPage && phonePage == null) View.VISIBLE else View.INVISIBLE },
                 modifier = Modifier.fillMaxSize(),
             )
+
+            if (onPage && phonePage != null) {
+                TilePage(
+                    page = phonePage,
+                    focused = c.focusedBox,
+                    onTap = { x, y ->
+                        val (dx, dy) = phonePage.toDoc(x, y)
+                        if (c.tapPhone(dx, dy) != null) bezel.haptics.tick() else chromeVisible = true
+                    },
+                    onHold = { x, y ->
+                        val (dx, dy) = phonePage.toDoc(x, y)
+                        val box = phonePage.boxAt(dx, dy)
+                        if (box?.kind == Box.Kind.LINK && box.href.isNotEmpty()) overlays.add(Overlay.Link(box.href, box.label)) else openRing()
+                    },
+                    onScroll = { dx, dy ->
+                        c.scrollPhone(dx, dy)
+                        bezel.onInteraction()
+                    },
+                )
+            }
 
             if (onPage && c.awaitingPaint && c.error == null) LoadingCover(host)
 
@@ -464,6 +497,11 @@ private fun OverlayContent(
                     },
                     RingItem(R.drawable.ic_bookmark, stringResource(R.string.menu_bookmarks)) { push(Overlay.Bookmarks) },
                     RingItem(R.drawable.ic_settings, stringResource(R.string.menu_settings)) { push(Overlay.Settings) },
+                    RingItem(
+                        if (c.onPhone) R.drawable.ic_watch else R.drawable.ic_phone,
+                        stringResource(if (c.onPhone) R.string.action_on_watch else R.string.action_via_phone),
+                        enabled = onPage && (c.onPhone || c.phoneReady),
+                    ) { close(); c.switchEngine() },
                     RingItem(R.drawable.ic_home, stringResource(R.string.action_home), enabled = onPage) { close(); c.showHome() },
                     RingItem(R.drawable.ic_close, stringResource(R.string.action_close)) { close() },
                 ),
@@ -488,7 +526,9 @@ private fun OverlayContent(
         Overlay.Tabs -> TabsScreen(deps.tabs, onDone = ::close)
         Overlay.Settings -> SettingsScreen(
             settings = settings,
+            phoneConnected = deps.phone.connected,
             onSearch = deps.settingsRepo::setSearchTemplate,
+            onPhone = deps.settingsRepo::setPhonePages,
             onBlock = deps.settingsRepo::setBlockTrackers,
             onView = deps.settingsRepo::setDefaultView,
             onKeepOn = deps.settingsRepo::setKeepScreenOn,

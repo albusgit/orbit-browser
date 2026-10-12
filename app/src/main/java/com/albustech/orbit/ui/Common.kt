@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -48,17 +46,14 @@ fun OrbitList(
 }
 
 /**
- * Rows soften with distance from the screen centre: they dim toward the edges and the
- * outermost (about three rows from focus) also blur, so the row in the middle reads as focused.
- * Headers stay sharp.
+ * Rows dim with distance from the screen centre, so the row in the middle reads as focused.
+ * No blur: a RenderEffect per row costs an offscreen pass on every scroll frame.
  */
 fun Modifier.focusFade(item: TransformingLazyColumnItemScope): Modifier = graphicsLayer {
     val p = with(item) { scrollProgress }
     if (p.isUnspecified) return@graphicsLayer
     val off = kotlin.math.abs((p.topOffsetFraction + p.bottomOffsetFraction) - 1f).coerceIn(0f, 1f)
     alpha = 1f - 0.5f * off
-    val blur = ((off - 0.72f) / 0.28f).coerceIn(0f, 1f) * 2f * density
-    renderEffect = if (blur > 0.5f) BlurEffect(blur, blur, TileMode.Decal) else null
 }
 
 fun TransformingLazyColumnScope.header(text: @Composable () -> String) {

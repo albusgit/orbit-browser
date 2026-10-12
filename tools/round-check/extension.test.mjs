@@ -67,7 +67,7 @@ test('WebGL guard is on everywhere until the app lists sites, then excludes them
   await bg.onAppMessage({ cmd: 'webgl', allow: ['maps.example', 'bad host!'] });
   const last = browser.log.registered.at(-1);
   eq(last.excludeMatches, ['*://maps.example/*', '*://*.maps.example/*']);
-  assert.equal(last.allFrames, true);
+  assert.equal(last.allFrames, false);
   assert.equal(browser.log.unregistered, 1);
 });
 

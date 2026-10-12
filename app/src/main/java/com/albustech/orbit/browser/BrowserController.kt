@@ -23,6 +23,14 @@ import com.albustech.orbit.data.db.ReadingPosition
 import com.albustech.orbit.data.db.SiteMode
 import com.albustech.orbit.data.db.SiteSettings
 import com.albustech.orbit.input.GeckoScroller
+import com.albustech.orbit.link.Box
+import com.albustech.orbit.link.FieldFocus
+import com.albustech.orbit.link.Input
+import com.albustech.orbit.link.OpenRequest
+import com.albustech.orbit.link.PageMeta
+import com.albustech.orbit.link.Paths
+import com.albustech.orbit.link.Tile
+import com.albustech.orbit.link.View as PhoneView
 import com.albustech.orbit.reader.Anchor
 import com.albustech.orbit.reader.Article
 import com.albustech.orbit.reader.ArticleSanitizer
@@ -51,6 +59,7 @@ import org.mozilla.geckoview.WebResponse
 import java.security.SecureRandom
 import kotlin.math.abs
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sign
 
 /** What the controller needs from the Activity. */
@@ -84,14 +93,21 @@ interface BrowserHost {
  * runs the Compact view at document start, injects Readability / serp.js / links.js on request
  * and relays their messages.
  *
- * Reader flow: a page loads (Mobile, Compact or Desktop); if its site is AUTO or READER, extract.js runs
+ * Reader flow: a page loads (Mobile, Compact or Desktop); if its site is on READER, extract.js runs
  * Readability and posts the article back; the app sanitises it again and hands it to the
  * extension, then loads the extension's reader page (moz-extension://…/reader.html#u=article).
  * History becomes [… A, A-reader]; Back from the reader skips A (which would only re-open it).
+ *
+ * With the phone helper reachable, pages are rendered on the phone instead ([PhoneLink],
+ * [PhonePage]): the phone loads and draws the real page with ads blocked and sends picture
+ * strips, which the watch scrolls through itself. Gecko then isn't even started. It takes over
+ * when the phone is away or slow, for pages that must stay live (video, maps, games), for sites
+ * the user moved to the watch, and to show Reader. Back from such a page returns to the phone's.
  */
 class BrowserController(
     context: Context,
-    runtime: GeckoRuntime,
+    /** Starts Gecko. Called only when a page first needs the watch's own engine. */
+    private val runtime: () -> GeckoRuntime,
     private val extension: OrbitExtension,
     private val geometry: RoundGeometry,
     private val repo: BrowserRepository,
@@ -99,6 +115,7 @@ class BrowserController(
     private val memoryLog: MemoryLog,
     private val connection: ConnectionMonitor,
     private val host: BrowserHost,
+    private val phone: PhoneLink,
 ) : PageListener {
     // ------------------------------------------------------------ observable state
 
@@ -161,9 +178,33 @@ class BrowserController(
     var serp by mutableStateOf<SerpState?>(null)
         private set
 
+    /** Non-null while the page on screen was rendered by the phone (hidden while Reader shows). */
+    var phonePage by mutableStateOf<PhonePage?>(null)
+        private set
+
+    /** Link mode on a phone page: the focused link's box, for the highlight. */
+    var focusedBox by mutableStateOf<Box?>(null)
+        private set
+
+    /** A text field on the phone's page took focus: the UI opens the keyboard. */
+    var fieldFocus by mutableStateOf<FieldFocus?>(null)
+        private set
+
+    /** The page on screen is the phone's. */
+    val onPhone: Boolean get() = phonePage != null && readerUrl == null
+
+    /** Pages can go through the phone now. */
+    val phoneReady: Boolean get() = usePhone && !phoneDown && phone.connected
+
     // ---------------------------------------------------------------- settings in
 
     var searchTemplate: String = DEFAULT_SEARCH_TEMPLATE
+
+    /** The "Load through phone" setting. */
+    var usePhone = true
+
+    /** Text size (percent) for pages the phone renders. */
+    var textZoom = 100
     var readerStyle: ReaderStyle = ReaderStyle()
         set(value) {
             if (value == field) return
@@ -173,7 +214,7 @@ class BrowserController(
 
     // ------------------------------------------------------------------- engine
 
-    private val session = GeckoSession(
+    private val geckoSession = GeckoSession(
         GeckoSessionSettings.Builder()
             .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
@@ -188,8 +229,13 @@ class BrowserController(
         setBackgroundColor(Color.BLACK)
     }
 
-    private val runtimeRef = runtime
-    private val scroller = GeckoScroller { session.panZoomController }
+    /** True once Gecko runs and the session is open: until then nothing of Gecko is loaded. */
+    private var geckoOpen = false
+
+    /** The session, started on first use. */
+    private val session: GeckoSession get() = geckoSession.also { ensureGecko() }
+
+    private val scroller = GeckoScroller { if (geckoOpen) geckoSession.panZoomController else null }
 
     // ------------------------------------------------------------------- internals
 
@@ -217,6 +263,42 @@ class BrowserController(
     private var pendingFontSize: Int? = null
     private val readerAnchors = HashMap<String, Anchor>()
 
+    // Phone pages.
+    /** The phone helper said it can't run (not allowed in the background): watch only this session. */
+    private var phoneDown = false
+    /** Pages the watch renders itself: picked by the user, live pages, or the phone was too slow. */
+    private val watchOnly = HashSet<String>()
+    /** Asked the phone for this page; no strip yet. */
+    private var phoneAwaiting: String? = null
+    /** Phone page revisions up to this one are old pages still sending: ignored. */
+    private var acceptAbove = 0
+    private var lastMeta: PageMeta? = null
+    private val pendingTiles = ArrayList<Tile>()
+    /** Recent phone pages by address: Back shows them at once while the phone goes back. */
+    private val phoneCache = object : LinkedHashMap<String, PhonePage>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, PhonePage>) = size > PHONE_CACHE
+    }
+    /** The phone page left for a watch-rendered one: Back returns to it. */
+    private var parked: PhonePage? = null
+    /** The reader on screen was extracted from a phone page; Back returns to that page. */
+    private var readerOverPhone = false
+    private var phoneLinks: List<Box> = emptyList()
+    private var freshPhoneHistory = false
+    private var phoneFocus = -1
+
+    /** Gecko events concern the screen: no phone page is in front, or Reader is over one. */
+    private val geckoInFront: Boolean get() = (phonePage == null && phoneAwaiting == null) || readerOverPhone
+
+    private val phoneTimeout = Runnable {
+        val target = phoneAwaiting ?: return@Runnable
+        Log.i(TAG, "The phone didn't answer for $target: loading it on the watch")
+        watchOnly.add(key(target))
+        loadUrl(target)
+    }
+    private val reportView = Runnable {
+        phonePage?.let { phone.send(Paths.INPUT, Input(Input.Type.VIEW, y = it.offsetY.toInt()).toJson()) }
+    }
+
     /** Gecko's history list, from HistoryDelegate. */
     private var history: List<String?> = emptyList()
     private var historyIndex = -1
@@ -238,16 +320,13 @@ class BrowserController(
     }
 
     init {
-        session.navigationDelegate = Navigation()
-        session.progressDelegate = Progress()
-        session.contentDelegate = Content()
-        session.historyDelegate = History()
-        session.promptDelegate = Prompts(context)
-        session.open(runtime)
-        view.setSession(session)
-        runtime.webExtensionController.setTabActive(session, true)
+        geckoSession.navigationDelegate = Navigation()
+        geckoSession.progressDelegate = Progress()
+        geckoSession.contentDelegate = Content()
+        geckoSession.historyDelegate = History()
+        geckoSession.promptDelegate = Prompts(context)
         extension.listener = this
-        OrbitRuntime.onUblock { ublock -> session.webExtensionController.setActionDelegate(ublock, BlockedBadge()) }
+        phone.listener = PhoneEvents()
         applySite(SiteSettings(host = ""))
         extension.setWebGlAllowed(emptySet())
         scope.launch {
@@ -255,6 +334,29 @@ class BrowserController(
             extension.setWebGlAllowed(richGraphicsSites())
             reapplyCachedSite()
         }
+    }
+
+    /**
+     * Starts Gecko and opens the session, once. Gecko's start is the slowest part of opening
+     * Orbit on a watch, so it waits for the first page the watch renders itself.
+     * False if the engine can't start (an error screen says so).
+     */
+    private fun ensureGecko(): Boolean {
+        if (geckoOpen) return true
+        val rt = try {
+            runtime()
+        } catch (e: Throwable) {
+            // Gecko's native libraries failed to load (wrong ABI, damaged install).
+            Log.e(TAG, "Engine failed to start", e)
+            error = PageError(url.orEmpty(), PageError.Kind.ENGINE, e.javaClass.simpleName, connection.current())
+            return false
+        }
+        geckoOpen = true
+        geckoSession.open(rt)
+        view.setSession(geckoSession)
+        rt.webExtensionController.setTabActive(geckoSession, true)
+        OrbitRuntime.onUblock { ublock -> geckoSession.webExtensionController.setActionDelegate(ublock, BlockedBadge()) }
+        return true
     }
 
     // ------------------------------------------------------------------ navigation
@@ -276,6 +378,16 @@ class BrowserController(
         hasPage = true
         url = target
         awaitingPaint = true
+        applySiteFor(target)
+        if (phoneFor(target)) {
+            openViaPhone(target, fresh = false)
+            return
+        }
+        leavePhone()
+        if (!ensureGecko()) {
+            awaitingPaint = false
+            return
+        }
         prepareFor(target)
         session.loadUri(target)
     }
@@ -286,14 +398,16 @@ class BrowserController(
             // A blank tab: unload the old page (stops its scripts) and start a fresh history
             // with the next real page. about:blank itself is never treated as a page.
             showHome()
-            session.loadUri(GeckoHistory.BLANK)
+            if (geckoOpen) session.loadUri(GeckoHistory.BLANK)
             clearHistoryOnNextLoad = true
             url = null
             title = null
             readerUrl = null
             reader = null
         } else {
+            // Through the phone the new history starts on the phone; on the watch, here.
             clearHistoryOnNextLoad = true
+            freshPhoneHistory = true
             loadUrl(target)
         }
     }
@@ -304,7 +418,30 @@ class BrowserController(
             setBezel(BezelMode.SCROLL)
             return true
         }
-        val steps = backSteps() ?: return false
+        if (readerOverPhone) {
+            leaveReaderForPhone()
+            return true
+        }
+        if (phonePage != null) {
+            val meta = lastMeta
+            if (meta?.canBack != true) return false
+            // Show the page we're going back to at once, if it's still here; the phone's copy follows.
+            // (Revision -1: nothing the phone still sends for the page being left lands on it.)
+            meta.backUrl?.let { phoneCache[key(it)] }?.let { cached ->
+                val placeholder = PhonePage(-1, cached.url, geometry.widthPx, geometry.heightPx).also { it.prefill(cached) }
+                phonePage = placeholder
+                url = cached.url
+                awaitingPaint = false
+            }
+            phone.send(Paths.INPUT, Input(Input.Type.BACK).toJson())
+            return true
+        }
+        val steps = backSteps()
+        if (steps == null) {
+            val p = parked ?: return false
+            resumeParked(p)
+            return true
+        }
         session.gotoHistoryIndex(historyIndex + steps)
         return true
     }
@@ -318,11 +455,19 @@ class BrowserController(
     private fun docOf(entry: String?): String? = ReaderTemplate.articleOf(entry, extension.baseUrl) ?: entry
 
     fun forward() {
-        if (geckoCanGoForward) session.goForward()
+        if (onPhone) {
+            phone.send(Paths.INPUT, Input(Input.Type.FORWARD).toJson())
+        } else if (geckoCanGoForward) {
+            session.goForward()
+        }
     }
 
     fun reloadOrStop() {
-        if (isLoading) session.stop() else reload()
+        when {
+            !isLoading -> reload()
+            onPhone || phoneAwaiting != null -> phone.send(Paths.INPUT, Input(Input.Type.STOP).toJson())
+            else -> session.stop()
+        }
     }
 
     fun reload() {
@@ -332,13 +477,14 @@ class BrowserController(
             // A stopped or failed navigation never committed: reload() would reload the page before it.
             failed != null && isWebUrl(failed.url) -> loadUrl(failed.url)
             // Fetch the article afresh; Back still skips every copy of it.
-            readerUrl != null -> loadUrl(readerUrl!!)
+            readerUrl != null && !readerOverPhone -> loadUrl(readerUrl!!)
+            onPhone -> phone.send(Paths.INPUT, Input(Input.Type.RELOAD).toJson())
             else -> session.reload()
         }
     }
 
     fun showHome() {
-        session.stop()
+        if (geckoOpen) session.stop()
         setBezel(BezelMode.SCROLL)
         error = null
         hasPage = false
@@ -358,8 +504,17 @@ class BrowserController(
         val pageUrl = readerUrl ?: url ?: return
         val key = Suggestions.siteKey(pageUrl) ?: return
         saveSite(savedSite(key).copy(mode = mode))
+        val wantsReader = mode == SiteMode.READER
+        if (readerOverPhone && !wantsReader) {
+            leaveReaderForPhone()
+            loadUrl(pageUrl)
+            return
+        }
+        if (onPhone) {
+            if (wantsReader) requestExtract(pageUrl, force = true) else loadUrl(pageUrl)
+            return
+        }
         val source = readerUrl
-        val wantsReader = mode == SiteMode.READER || mode == SiteMode.AUTO
         when {
             source != null && !wantsReader -> {
                 // Leave the reader for the original page, re-using its entry if it's right behind us.
@@ -386,6 +541,10 @@ class BrowserController(
         defaultView = view
         appliedSiteKey = null
         if (readerUrl != null) return // applied when the reader is left
+        if (onPhone) {
+            url?.let(::loadUrl)
+            return
+        }
         applySiteFor(url)
         if (hasPage) session.reload()
     }
@@ -397,7 +556,11 @@ class BrowserController(
         val updated = transform(savedSite(key))
         saveSite(updated)
         applySite(updated)
-        if (readerUrl != null) session.settings.allowJavascript = true else if (hasPage) session.reload()
+        when {
+            readerUrl != null -> session.settings.allowJavascript = true
+            onPhone -> loadUrl(pageUrl) // JavaScript off, images off or Lite: the watch's engine does those
+            hasPage -> session.reload()
+        }
     }
 
     private fun savedSite(key: String) = siteCache[key] ?: SiteSettings(host = key)
@@ -406,7 +569,7 @@ class BrowserController(
     private fun reapplyCachedSite() {
         val key = appliedSiteKey ?: return
         val saved = siteCache[key] ?: return
-        if (saved == site) return
+        if (saved == site || !geckoInFront) return
         appliedSiteKey = null
         if (readerUrl != null) {
             applySiteFor(readerUrl)
@@ -475,6 +638,12 @@ class BrowserController(
             }
         }
         if (results.isEmpty()) {
+            if (phonePage != null || phoneAwaiting != null) {
+                // The phone already retried: show its picture of the page instead.
+                serpFallback.add(key(state.url))
+                serp = null
+                return
+            }
             if (isLoading) return // the finished page gets another try
             if (!serpRetried) {
                 serpRetried = true
@@ -499,7 +668,7 @@ class BrowserController(
 
     private fun applySite(s: SiteSettings) {
         site = s
-        val settings = session.settings
+        val settings = geckoSession.settings
         settings.allowJavascript = s.javaScript
         extension.setBlockImages(s.blockImages)
         val mode = RenderMode.forSite(s.mode, defaultView)
@@ -517,6 +686,19 @@ class BrowserController(
 
     /** Routes bezel detents according to the bezel mode and the render mode. */
     fun onBezel(detents: Int, stepPx: Int, eventTimeMs: Long) {
+        val page = phonePage?.takeIf { readerUrl == null }
+        if (page != null) {
+            when (bezelMode) {
+                BezelMode.SCROLL, BezelMode.CURSOR -> if (!page.scrollBy(detents * stepPx.toFloat())) host.onEdge()
+                BezelMode.LINKS -> {
+                    val dir = sign(detents.toFloat()).toInt()
+                    repeat(abs(detents)) { stepPhoneLink(page, dir) }
+                }
+                BezelMode.ZOOM -> page.zoomBy(ZOOM_STEP.pow(detents))
+            }
+            onPhoneScrolled(page)
+            return
+        }
         when (bezelMode) {
             BezelMode.SCROLL, BezelMode.CURSOR -> if (readerUrl != null) {
                 extension.reader("turn", detents)
@@ -552,11 +734,19 @@ class BrowserController(
 
     fun setBezel(mode: BezelMode) {
         if (linksActive && mode != BezelMode.LINKS) {
-            links("linksStop")
+            if (!onPhone) links("linksStop")
             linksActive = false
             focusedLink = null
         }
         bezelMode = mode
+        focusedBox = null
+        phoneFocus = -1
+        val page = phonePage?.takeIf { readerUrl == null }
+        if (page != null) {
+            linksActive = mode == BezelMode.LINKS
+            if (linksActive) stepPhoneLink(page, 1)
+            return
+        }
         if (mode == BezelMode.LINKS && !linksActive) {
             if (!site.javaScript && readerUrl == null) {
                 host.toast("Link focus needs JavaScript on this site")
@@ -569,19 +759,37 @@ class BrowserController(
         }
     }
 
-    fun activateFocusedLink() = links("linksActivate")
+    fun activateFocusedLink() {
+        val b = focusedBox
+        if (onPhone && b != null) tapPhone(b.x + b.w / 2, b.y + b.h / 2) else links("linksActivate")
+    }
 
     /** Cursor mode: clicks the page at ([x], [y]) in view pixels. */
-    fun clickAt(x: Float, y: Float) = scroller.tap(x, y)
+    fun clickAt(x: Float, y: Float) {
+        val page = phonePage?.takeIf { readerUrl == null }
+        if (page == null) {
+            scroller.tap(x, y)
+            return
+        }
+        val (dx, dy) = page.toDoc(x, y)
+        tapPhone(dx, dy)
+    }
 
     /** Cursor mode: the finger dragged by ([dx], [dy]) px; the page follows it under the cursor. */
     fun panBy(dx: Float, dy: Float) {
-        if (readerUrl == null) scroller.scrollBy(-dx, -dy)
+        val page = phonePage?.takeIf { readerUrl == null }
+        if (page != null) {
+            page.scrollBy(-dy)
+            page.panBy(-dx)
+            onPhoneScrolled(page)
+        } else if (readerUrl == null) {
+            scroller.scrollBy(-dx, -dy)
+        }
     }
 
     /** Clears a text selection a long press may have started (before the ring opens over it). */
     fun clearSelection() {
-        if (readerUrl == null) extension.page("clearSelection")
+        if (readerUrl == null && !onPhone) extension.page("clearSelection")
     }
 
     /** Link focus commands go to bridge.js on web pages and to the reader page in Reader. */
@@ -589,17 +797,338 @@ class BrowserController(
         if (readerUrl != null) extension.reader(name, arg) else extension.page(name, arg)
     }
 
+    // ------------------------------------------------------------------- phone
+
+    /** Whether [target] goes through the phone: reachable, and nothing about the site needs the watch's engine. */
+    private fun phoneFor(target: String): Boolean =
+        phoneReady && key(target) !in watchOnly && site.javaScript && !site.blockImages && !site.liteUserAgent
+
+    private fun openViaPhone(target: String, fresh: Boolean) {
+        val mode = RenderMode.forSite(site.mode, defaultView)
+        val (view, css, scale) = when (mode) {
+            RenderMode.ZOOM -> Triple(PhoneView.DESKTOP, DESKTOP_CSS, 2)
+            RenderMode.COMPACT -> Triple(PhoneView.COMPACT, COMPACT_CSS, 1)
+            else -> Triple(PhoneView.MOBILE, geometry.diameterCss.roundToInt(), 1)
+        }
+        val request = OpenRequest(target, view, css, geometry.widthPx, geometry.heightPx, scale, textZoom, fresh || freshPhoneHistory)
+        freshPhoneHistory = false
+        if (!phone.send(Paths.OPEN, request.toJson())) {
+            watchOnly.add(key(target))
+            loadUrl(target)
+            return
+        }
+        val geckoShowing = geckoOpen && geckoInFront
+        // Set before Gecko is told anything, so its events for the page being left are ignored.
+        phoneAwaiting = target
+        acceptAbove = maxOf(acceptAbove, lastMeta?.rev ?: 0)
+        if (geckoShowing) unloadGecko()
+        readerOverPhone = false
+        readerUrl = null
+        reader = null
+        parked = null
+        isLoading = true
+        progress = 0
+        prepareSerpOnPhone(target)
+        resetPageInput()
+        main.removeCallbacks(phoneTimeout)
+        main.postDelayed(phoneTimeout, PHONE_TIMEOUT_MS)
+    }
+
+    /** Stops Gecko's page (its scripts, its memory) while the phone's is on screen. */
+    private fun unloadGecko() {
+        if (!geckoOpen) return
+        main.removeCallbacks(watchdog)
+        session.loadUri(GeckoHistory.BLANK)
+        clearHistoryOnNextLoad = true
+    }
+
+    private fun prepareSerpOnPhone(target: String) {
+        val page = Serp.detect(target)
+        serp = when {
+            page == null || key(target) in serpFallback -> null
+            serp?.let { key(it.url) } == key(target) -> serp
+            else -> SerpState.Loading(page, target)
+        }
+    }
+
+    private fun resetPageInput() {
+        focusedLink = null
+        focusedBox = null
+        linksActive = false
+        phoneFocus = -1
+        bezelMode = BezelMode.SCROLL
+        fieldFocus = null
+        scrollFraction = 0f
+    }
+
+    /** A page goes to the watch's engine: the phone page waits behind it for Back. */
+    private fun leavePhone() {
+        main.removeCallbacks(phoneTimeout)
+        phoneAwaiting = null
+        val page = phonePage ?: return
+        parked = page
+        phonePage = null
+        readerOverPhone = false
+        resetPageInput()
+    }
+
+    private fun resumeParked(page: PhonePage) {
+        parked = null
+        unloadGecko()
+        phonePage = page
+        url = page.url
+        title = lastMeta?.takeIf { it.rev == page.rev }?.title ?: title
+        readerUrl = null
+        reader = null
+        error = null
+        serp = null
+        isLoading = false
+        awaitingPaint = false
+        resetPageInput()
+        refreshNav()
+    }
+
+    /** Back from a reader opened over a phone page: that page is still here. */
+    private fun leaveReaderForPhone() {
+        readerOverPhone = false
+        val page = phonePage
+        unloadGecko()
+        readerUrl = null
+        reader = null
+        url = page?.url ?: url
+        title = lastMeta?.title ?: title
+        isLoading = false
+        awaitingPaint = false
+        error = null
+        resetPageInput()
+        refreshNav()
+    }
+
+    private fun onPhoneScrolled(page: PhonePage) {
+        scrollFraction = page.fraction
+        main.removeCallbacks(reportView)
+        main.postDelayed(reportView, VIEW_REPORT_MS)
+        if (!isLoading) {
+            savePositionSoon(ReadingPosition(url = page.url, title = title, reader = false, scrollFraction = scrollFraction, updatedAt = System.currentTimeMillis()))
+        }
+    }
+
+    /** Link mode on a phone page: the next or previous link in reading order, kept on screen. */
+    private fun stepPhoneLink(page: PhonePage, dir: Int) {
+        if (phoneLinks.isEmpty()) {
+            focusedLink = null
+            focusedBox = null
+            return
+        }
+        val next = if (phoneFocus !in phoneLinks.indices) {
+            // Start at the first link on screen.
+            phoneLinks.indexOfFirst { it.y + it.h > page.offsetY }.takeIf { it >= 0 } ?: phoneLinks.lastIndex
+        } else {
+            phoneFocus + dir
+        }
+        if (next !in phoneLinks.indices) {
+            host.onEdge()
+            return
+        }
+        phoneFocus = next
+        val b = phoneLinks[next]
+        val screen = geometry.heightPx / page.scale
+        if (b.y < page.offsetY + screen * 0.2f || b.y + b.h > page.offsetY + screen * 0.8f) page.scrollToDoc(b.y + b.h / 2f - screen / 2f)
+        focusedBox = b
+        focusedLink = LinkFocus(b.href, b.label, b.kind.name.lowercase(), next, phoneLinks.size)
+    }
+
+    /** A tap on the phone page at document ([x], [y]); returns what it hit, if anything. */
+    fun tapPhone(x: Int, y: Int): Box? {
+        val page = phonePage ?: return null
+        phone.send(Paths.INPUT, Input(Input.Type.TAP, x, y).toJson())
+        return page.boxAt(x, y)
+    }
+
+    /** The phone page scrolled by touch, [dy] screen px. */
+    fun scrollPhone(dx: Float, dy: Float) {
+        val page = phonePage ?: return
+        page.scrollBy(dy)
+        page.panBy(dx)
+        onPhoneScrolled(page)
+    }
+
+    /** Text for the focused field on the phone's page, sent with Enter. */
+    fun typeIntoPage(text: String) {
+        phone.send(Paths.INPUT, Input(Input.Type.TEXT, text = text, submit = true).toJson())
+    }
+
+    fun consumeFieldFocus() {
+        fieldFocus = null
+    }
+
+    /** "Open on watch" / "Open via phone" for the page on screen. */
+    fun switchEngine() {
+        val pageUrl = (if (readerOverPhone) phonePage?.url else null) ?: url ?: return
+        if (onPhone) {
+            watchOnly.add(key(pageUrl))
+        } else {
+            watchOnly.remove(key(pageUrl))
+            if (!phoneReady) {
+                host.toast("Phone not connected")
+                return
+            }
+        }
+        loadUrl(pageUrl)
+    }
+
+    private inner class PhoneEvents : PhoneLink.Listener {
+
+        override fun onMeta(meta: PageMeta) {
+            if (meta.error == PageMeta.UNAVAILABLE) {
+                phoneDown = true
+                host.toast("Open Orbit Phone and allow it in the background")
+                phoneAwaiting?.let {
+                    phoneAwaiting = null
+                    loadUrl(it)
+                }
+                return
+            }
+            val asked = phoneAwaiting
+            // The helper restarted (its count began again) but this is the page just asked for.
+            val answer = asked != null && sameDoc(meta.url, asked)
+            // Older revisions are pages already left (still sending a late capture).
+            if (meta.rev <= acceptAbove && !answer) return
+            var page = phonePage
+            if (page == null || meta.rev != page.rev) {
+                // A new page: the one asked for, or one a tap on the phone's page opened.
+                if ((page == null && asked == null) || readerOverPhone) return
+                page = startPhonePage(meta, page)
+            }
+            lastMeta = meta
+            page.docWidth = meta.width
+            page.docHeight = meta.height
+            meta.boxes?.let {
+                page.boxes = it
+                phoneLinks = it.sortedWith(compareBy({ b -> b.y }, { b -> b.x }))
+            }
+            if (meta.title.isNotBlank()) title = meta.title
+            if (meta.url.isNotBlank() && meta.url != url) url = meta.url
+            progress = meta.progress
+            blockedCount = meta.blocked
+            refreshNav()
+            if (meta.error != null) {
+                val kind = PageError.Kind.entries.firstOrNull { it.name == meta.error } ?: PageError.Kind.OTHER
+                error = PageError(url.orEmpty(), kind, meta.errorDetail, connection.current())
+                serp = null
+                isLoading = false
+                awaitingPaint = false
+                phoneAwaiting = null
+                main.removeCallbacks(phoneTimeout)
+                return
+            }
+            if (meta.live) {
+                // Video, a map, a game: pictures won't do. The watch's engine shows it.
+                watchOnly.add(key(meta.url))
+                loadUrl(meta.url)
+                return
+            }
+            val finished = isLoading && !meta.loading
+            isLoading = meta.loading
+            if (finished) onPhonePageDone(page)
+        }
+
+        private fun startPhonePage(meta: PageMeta, old: PhonePage?): PhonePage {
+            old?.let { phoneCache[key(it.url)] = it }
+            acceptAbove = meta.rev - 1
+            val page = PhonePage(meta.rev, meta.url, geometry.widthPx, geometry.heightPx)
+            phoneCache[key(meta.url)]?.let(page::prefill)
+            phonePage = page
+            // The phone is on it: from here it reports its own load errors.
+            main.removeCallbacks(phoneTimeout)
+            url = meta.url
+            title = meta.title
+            error = null
+            awaitingPaint = !page.hasStrips
+            isLoading = true
+            applySiteFor(meta.url)
+            prepareSerpOnPhone(meta.url)
+            resetPageInput()
+            scrollFraction = page.fraction
+            pendingTiles.filter { it.rev == meta.rev }.forEach(page::put)
+            pendingTiles.clear()
+            if (page.hasStrips) gotStrip()
+            return page
+        }
+
+        override fun onTile(tile: Tile) {
+            val page = phonePage
+            if (page == null || tile.rev != page.rev) {
+                // Strips can overtake their page's meta.
+                if (tile.rev > (page?.rev ?: acceptAbove) && pendingTiles.size < MAX_PENDING_TILES) pendingTiles.add(tile)
+                return
+            }
+            page.put(tile)
+            gotStrip()
+        }
+
+        private fun gotStrip() {
+            awaitingPaint = false
+            phoneAwaiting = null
+            main.removeCallbacks(phoneTimeout)
+        }
+
+        override fun onSerp(msg: JSONObject) {
+            if (msg.optInt("rev") != phonePage?.rev) return
+            gotStrip()
+            this@BrowserController.onSerp(msg)
+        }
+
+        override fun onArticle(msg: JSONObject) {
+            if (msg.optInt("rev") != phonePage?.rev) return
+            onArticle(msg, msg.optString("url"))
+        }
+
+        override fun onFocus(focus: FieldFocus) {
+            if (focus.rev == phonePage?.rev && readerUrl == null) fieldFocus = focus
+        }
+    }
+
+    private fun onPhonePageDone(page: PhonePage) {
+        val pageUrl = page.url
+        host.onPageCommitted(pageUrl)
+        memoryLog.onPageLoaded(pageUrl)
+        scope.launch { repo.recordVisit(pageUrl, title) }
+        if (serp != null) return
+        if (site.mode == SiteMode.READER) requestExtract(pageUrl, force = true)
+        // Back to where this page was left last time.
+        scope.launch {
+            val pos = repo.position(pageUrl) ?: return@launch
+            if (pos.reader || pos.scrollFraction < 0.01f || phonePage !== page || page.offsetY > 0f) return@launch
+            page.scrollToDoc(pos.scrollFraction * (page.docHeight - geometry.heightPx / page.scale))
+            onPhoneScrolled(page)
+        }
+    }
+
     // ------------------------------------------------------------------- reader
 
     private fun requestExtract(pageUrl: String, force: Boolean) {
+        if (onPhone) {
+            // The phone runs Readability; the watch's engine starts meanwhile to show the reader.
+            if (!ensureGecko()) return
+            pendingExtract = pageUrl
+            phone.send(Paths.INPUT, Input(Input.Type.EXTRACT, submit = force).toJson())
+            return
+        }
         if (extension.baseUrl == null) return // the extension isn't up yet: no reader page to show
         pendingExtract = pageUrl
         extension.inject("extract", force)
     }
 
     private fun showReader(article: Article) {
-        val base = extension.baseUrl ?: return
         scope.launch {
+            // Gecko may have only just started (Reader from a phone page): wait for its extension.
+            var waited = 0L
+            while (extension.baseUrl == null && waited < EXTENSION_WAIT_MS) {
+                delay(100)
+                waited += 100
+            }
+            val base = extension.baseUrl ?: return@launch
             val saved = repo.position(article.url)
             val anchor = readerAnchors[key(article.url)]
                 ?: saved?.takeIf { it.reader }?.let { Anchor(it.anchorBlock, it.anchorWord) }
@@ -612,6 +1141,7 @@ class BrowserController(
             if (!sameDoc(url, article.url)) return@launch // the user moved on meanwhile
             val token = newToken()
             extension.readerPayload(token, payload)
+            readerOverPhone = phonePage != null
             expectingReader = article.url
             readerTitle = article.title
             session.settings.allowJavascript = true // the reader's own script; the extension's CSP keeps page code out
@@ -780,8 +1310,13 @@ class BrowserController(
     // ----------------------------------------------------------------- helpers
 
     private fun refreshNav() {
-        canGoBack = backSteps() != null
-        canGoForward = geckoCanGoForward
+        if (!geckoInFront) {
+            canGoBack = lastMeta?.canBack == true
+            canGoForward = lastMeta?.canForward == true
+            return
+        }
+        canGoBack = backSteps() != null || readerOverPhone || parked != null
+        canGoForward = geckoCanGoForward && !readerOverPhone
     }
 
     private fun armWatchdog() {
@@ -794,11 +1329,12 @@ class BrowserController(
     private fun sameDoc(a: String?, b: String?): Boolean = a != null && b != null && key(a) == key(b)
 
     /** A snapshot of the page for the tab switcher; Gecko delivers it a frame or two later. */
-    fun capture(): GeckoResult<Bitmap>? = if (view.width > 0 && view.height > 0) view.capturePixels() else null
+    fun capture(): GeckoResult<Bitmap>? = if (geckoOpen && geckoInFront && view.width > 0 && view.height > 0) view.capturePixels() else null
 
     /** Gecko's session state (history and form data) if small enough, and always the URL. */
     fun saveState(out: Bundle) {
         (readerUrl ?: url)?.let { out.putString(STATE_URL, it) }
+        if (!geckoInFront) return // the phone keeps that history
         val state = lastState?.toString() ?: return
         if (state.length <= MAX_STATE_CHARS) out.putString(STATE_SESSION, state)
     }
@@ -810,6 +1346,7 @@ class BrowserController(
             loadUrl(fallback)
             return isWebUrl(fallback)
         }
+        if (!ensureGecko()) return false
         session.restoreState(state)
         hasPage = true
         val current = state.getOrNull(state.currentIndex)
@@ -823,11 +1360,11 @@ class BrowserController(
     fun pause() {
         main.removeCallbacks(watchdog)
         scroller.stop()
-        session.setActive(false)
+        if (geckoOpen) session.setActive(false)
     }
 
     fun resume() {
-        session.setActive(true)
+        if (geckoOpen) session.setActive(true)
         armWatchdog()
     }
 
@@ -835,20 +1372,22 @@ class BrowserController(
     fun destroy() {
         main.removeCallbacksAndMessages(null)
         if (extension.listener === this) extension.listener = null
-        runtimeRef.webExtensionController.setTabActive(session, false)
+        if (!geckoOpen) return
+        runtime().webExtensionController.setTabActive(geckoSession, false)
         view.releaseSession()
-        session.close()
+        geckoSession.close()
     }
 
-    /** The "Block ads and trackers" setting. */
+    /** The "Stronger blocking" setting (uBlock Origin). */
     fun setBlocking(on: Boolean) {
-        OrbitRuntime.setBlocking(view.context, on)
+        OrbitRuntime.setBlocking(on)
         if (!on) blockedCount = 0
     }
 
     // ----------------------------------------------------------------- page start/stop
 
     private fun onStarted(pageUrl: String?) {
+        if (!geckoInFront) return
         val expected = expectingReader
         expectingReader = null
         if (pageUrl == GeckoHistory.BLANK) return // a blank tab, not a page
@@ -886,6 +1425,7 @@ class BrowserController(
     }
 
     private fun onStopped(success: Boolean) {
+        if (!geckoInFront) return
         isLoading = false
         awaitingPaint = false
         progress = 100
@@ -906,9 +1446,8 @@ class BrowserController(
         }
         host.onPageCommitted(pageUrl)
         scope.launch { repo.recordVisit(pageUrl, title) }
-        if (site.javaScript && (site.mode == SiteMode.AUTO || site.mode == SiteMode.READER)) {
-            requestExtract(pageUrl, force = site.mode == SiteMode.READER)
-        }
+        // Reader only when picked: running Readability on every page cost seconds on the watch.
+        if (site.javaScript && site.mode == SiteMode.READER) requestExtract(pageUrl, force = true)
         restoreScroll(pageUrl)
     }
 
@@ -965,7 +1504,7 @@ class BrowserController(
             hasUserGesture: Boolean,
         ) {
             // pushState and fragment changes on the same page (WebView's doUpdateVisitedHistory).
-            if (readerUrl == null && location != null && isWebUrl(location)) url = location
+            if (geckoInFront && readerUrl == null && location != null && isWebUrl(location)) url = location
             refreshNav()
         }
 
@@ -980,6 +1519,7 @@ class BrowserController(
         }
 
         override fun onLoadError(session: GeckoSession, uri: String?, err: WebRequestError): GeckoResult<String>? {
+            if (!geckoInFront) return null
             val conn = connection.current()
             val kind = if (conn == ConnectionType.NONE) PageError.Kind.OFFLINE else PageError.kindFor(err.category, err.code)
             error = PageError(uri ?: url.orEmpty(), kind, PageError.detailFor(err.code), conn)
@@ -997,7 +1537,7 @@ class BrowserController(
         override fun onPageStop(session: GeckoSession, success: Boolean) = onStopped(success)
 
         override fun onProgressChange(session: GeckoSession, progress: Int) {
-            if (progress != this@BrowserController.progress) {
+            if (geckoInFront && progress != this@BrowserController.progress) {
                 this@BrowserController.progress = progress
                 armWatchdog()
             }
@@ -1010,10 +1550,12 @@ class BrowserController(
 
     private inner class Content : ContentDelegate {
         override fun onTitleChange(session: GeckoSession, newTitle: String?) {
+            if (!geckoInFront) return
             title = if (readerUrl != null) readerTitle ?: newTitle else newTitle
         }
 
         override fun onFirstContentfulPaint(session: GeckoSession) {
+            if (!geckoInFront) return
             awaitingPaint = false
             // Results pages are read as soon as they paint, not when every last resource is in.
             if (serp is SerpState.Loading) extension.inject("serp")
@@ -1064,6 +1606,15 @@ class BrowserController(
         private const val ZOOM_STEP = 1.12f
         private val FALLBACK = Regex("S\\.browser_fallback_url=([^;]+)")
         private const val SERP_RETRY_MS = 700L
+        /** No word from the phone in this time: the watch loads the page itself. */
+        private const val PHONE_TIMEOUT_MS = 8000L
+        private const val PHONE_CACHE = 3
+        private const val MAX_PENDING_TILES = 40
+        private const val VIEW_REPORT_MS = 150L
+        private const val EXTENSION_WAIT_MS = 10_000L
+        /** Compact and Desktop widths in CSS px, as the watch's own engine lays them out. */
+        private const val COMPACT_CSS = 360
+        private const val DESKTOP_CSS = 980
         private const val RECENT_MS = 700L
         private const val STATE_URL = "orbit.url"
         private const val STATE_SESSION = "orbit.session"

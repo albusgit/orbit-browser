@@ -29,9 +29,12 @@ data class Settings(
     val lastUrl: String? = null,
     val reader: ReaderStyle = ReaderStyle(),
     val keepScreenOn: Boolean = false,
-    val blockTrackers: Boolean = true,
+    /** uBlock Origin on the watch's own engine, on top of Gecko's strict tracking protection. */
+    val blockTrackers: Boolean = false,
     /** How sites left on Auto render: Mobile, Compact or Desktop (a site's own View still wins). */
     val defaultView: RenderMode = RenderMode.MOBILE,
+    /** Pages are rendered by the phone helper when it's reachable. */
+    val phonePages: Boolean = true,
     /** The launcher's "Turn bezel to pick" hint shows until the bezel is first used there. */
     val bezelHintSeen: Boolean = false,
 ) {
@@ -91,6 +94,8 @@ class SettingsRepository(context: Context) {
 
     fun setBlockTrackers(on: Boolean) = edit { putBoolean(BLOCK_TRACKERS, on) }
 
+    fun setPhonePages(on: Boolean) = edit { putBoolean(PHONE_PAGES, on) }
+
     fun setDefaultView(view: RenderMode) = edit { putString(DEFAULT_VIEW, view.name) }
 
     fun setBezelHintSeen() {
@@ -111,11 +116,12 @@ class SettingsRepository(context: Context) {
             serif = prefs.getBoolean(READER_SERIF, true),
         ),
         keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, false),
-        blockTrackers = prefs.getBoolean(BLOCK_TRACKERS, true),
+        blockTrackers = prefs.getBoolean(BLOCK_TRACKERS, false),
         defaultView = prefs.getString(DEFAULT_VIEW, null)?.let { n -> RenderMode.VIEWS.firstOrNull { it.name == n } }
             // 0.3/0.4 had a Desktop sites switch.
             ?: if (prefs.getBoolean(DESKTOP_SITES, false)) RenderMode.ZOOM else RenderMode.MOBILE,
         bezelHintSeen = prefs.getBoolean(BEZEL_HINT_SEEN, false),
+        phonePages = prefs.getBoolean(PHONE_PAGES, true),
     )
 
     private companion object {
@@ -127,9 +133,11 @@ class SettingsRepository(context: Context) {
         const val READER_LINE_HEIGHT = "reader_line_height"
         const val READER_SERIF = "reader_serif"
         const val KEEP_SCREEN_ON = "keep_screen_on"
-        const val BLOCK_TRACKERS = "block_trackers"
+        // 0.6.0 made uBlock opt-in: a new key, so the old default-on value is not carried over.
+        const val BLOCK_TRACKERS = "ublock"
         const val DESKTOP_SITES = "desktop_sites"
         const val DEFAULT_VIEW = "default_view"
         const val BEZEL_HINT_SEEN = "bezel_hint_seen"
+        const val PHONE_PAGES = "phone_pages"
     }
 }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Orbit Phone</string>
+    <string name="setup_title">Orbit Phone</string>
+    <string name="setup_intro">Your phone loads web pages for Orbit on your watch: ads are blocked here, the page is drawn here, and the watch only shows the result. Keep this app installed; it works in the background.</string>
+    <string name="status_watch_connected">Watch connected: %1$s</string>
+    <string name="status_watch_none">No watch connected. Pair your watch and install Orbit on it.</string>
+    <string name="status_background_ok">Background use: allowed</string>
+    <string name="status_background_needed">Background use: not allowed yet. Without it the phone may not answer the watch.</string>
+    <string name="action_allow_background">Allow in background</string>
+    <string name="status_blocked_today">Ads and trackers blocked today: %1$d</string>
+    <string name="channel_name">Loading pages for your watch</string>
+    <string name="notification_text">Orbit is loading pages for your watch</string>
+</resources>

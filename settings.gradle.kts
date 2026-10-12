@@ -19,4 +19,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Orbit"
-include(":app")
+include(":app", ":shared", ":phone")

@@ -165,7 +165,8 @@ async function setWebGl(allow) {
   for (const h of allow) {
     if (typeof h === 'string' && HOST.test(h)) exclude.push(`*://${h}/*`, `*://*.${h}/*`);
   }
-  const options = { matches: WEB, js: [{ file: 'webgl.js' }], runAt: 'document_start', allFrames: true, matchAboutBlank: true };
+  // Main frame only: one script per ad iframe was measurable work on the watch.
+  const options = { matches: WEB, js: [{ file: 'webgl.js' }], runAt: 'document_start', allFrames: false };
   if (exclude.length) options.excludeMatches = exclude;
   state.webglScript = await browser.contentScripts.register(options);
 }

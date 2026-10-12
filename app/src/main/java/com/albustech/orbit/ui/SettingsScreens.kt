@@ -48,7 +48,9 @@ import com.albustech.orbit.input.Haptics
 @Composable
 fun SettingsScreen(
     settings: Settings,
+    phoneConnected: Boolean,
     onSearch: (String) -> Unit,
+    onPhone: (Boolean) -> Unit,
     onBlock: (Boolean) -> Unit,
     onView: (RenderMode) -> Unit,
     onKeepOn: (Boolean) -> Unit,
@@ -63,6 +65,14 @@ fun SettingsScreen(
             MenuButton(R.drawable.ic_search, stringResource(R.string.settings_search), {
                 onSearch(engines[(current.ordinal + 1) % engines.size].template)
             }, secondary = current.label)
+        }
+        item {
+            MenuSwitch(
+                stringResource(R.string.settings_phone),
+                settings.phonePages,
+                onPhone,
+                secondary = stringResource(if (phoneConnected) R.string.settings_phone_on else R.string.settings_phone_off),
+            )
         }
         item { MenuSwitch(stringResource(R.string.settings_block), settings.blockTrackers, onBlock, secondary = stringResource(R.string.settings_block_lists)) }
         item {

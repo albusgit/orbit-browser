@@ -15,8 +15,8 @@ android {
         applicationId = "com.albustech.orbit"
         minSdk = 30 // Wear OS 3+; the Watch6 Classic ships Wear OS 4 (API 33)
         targetSdk = 37
-        versionCode = 8
-        versionName = "0.5.0"
+        versionCode = 9
+        versionName = "0.6.0"
         // GeckoView ships per-ABI. Galaxy Watches have 64-bit CPUs but a 32-bit-only userspace
         // (abilist armeabi-v7a,armeabi): an arm64 build fails with INSTALL_FAILED_NO_MATCHING_ABIS.
         ndk { abiFilters += listOf("armeabi-v7a") }
@@ -159,6 +159,8 @@ dependencies {
     implementation(libs.androidx.wear.complications.data.source.ktx)
     implementation(libs.kotlinx.coroutines.guava)
     implementation(libs.jsoup)
+    implementation(project(":shared"))
+    implementation(libs.play.services.wearable)
 
     testImplementation(libs.junit)
     // Real org.json for plain JVM tests (android.jar only has stubs).

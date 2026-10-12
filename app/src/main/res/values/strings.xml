@@ -49,10 +49,9 @@
     <string name="tabs_hint">Long-press a tab to close it</string>
     <string name="new_tab">New tab</string>
     <string name="settings_search">Search engine</string>
-    <string name="settings_block">Block ads and trackers</string>
-    <string name="settings_block_lists">uBlock Origin</string>
+    <string name="settings_block">Stronger blocking</string>
+    <string name="settings_block_lists">uBlock Origin on the watch · slower</string>
     <string name="settings_view">View</string>
-    <string name="error_engine">Orbit\'s web engine couldn\'t start</string>
     <string name="settings_keep_on">Keep screen on while reading</string>
     <string name="settings_serif">Serif reader font</string>
     <string name="settings_about">Orbit %1$s · GeckoView © Mozilla, MPL 2.0 · uBlock Origin © Raymond Hill, GPLv3 · Readability © Arc90 / Mozilla, Apache 2.0 · Geist font, OFL 1.1</string>
@@ -95,4 +94,10 @@
     <string name="searching">Searching…</string>
     <string name="bezel_hint">Turn bezel to pick</string>
     <string name="continue_title">Continue · %1$s</string>
+    <string name="field_label">Type into the page</string>
+    <string name="settings_phone">Load through phone</string>
+    <string name="settings_phone_on">Phone connected · faster pages</string>
+    <string name="settings_phone_off">Phone not found · install Orbit Phone</string>
+    <string name="action_on_watch">On watch</string>
+    <string name="action_via_phone">Via phone</string>
 </resources>

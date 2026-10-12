@@ -10,8 +10,8 @@ import kotlin.math.sign
 
 /**
  * Bezel scrolling and zooming, and cursor clicks, for a GeckoView page, through Gecko's own async pan/zoom (APZ):
- * each detent asks for a smooth scroll of one step, and APZ chains the animations, so a click
- * during a scroll extends it. A fast spin becomes one long smooth scroll.
+ * each detent jumps one step at once (no smooth animation: on two small cores the animation
+ * frames lagged behind the bezel). A fast spin becomes one longer jump.
  *
  * Gecko doesn't report the scroll range synchronously; bridge.js does ([position], [max], in CSS
  * px), which is enough to tell when the page is already at an end.
@@ -34,7 +34,7 @@ class GeckoScroller(private val panZoom: () -> PanZoomController?) {
         if (max >= 0 && ((dir > 0 && position >= max - 1) || (dir < 0 && position <= 0))) return true
         val speed = momentum.record(dir, eventTimeMs)
         val distance = if (speed != null) dir * speed * stepPx * FLING_SECONDS else (detents * stepPx).toFloat()
-        panZoom()?.scrollBy(ScreenLength.zero(), ScreenLength.fromPixels(distance.toDouble()), PanZoomController.SCROLL_BEHAVIOR_SMOOTH)
+        panZoom()?.scrollBy(ScreenLength.zero(), ScreenLength.fromPixels(distance.toDouble()), PanZoomController.SCROLL_BEHAVIOR_AUTO)
         return false
     }
 
