@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "Orbit for Claude",
+  "version": "1.0",
+  "description": "The page side of Orbit for Claude: sends what you say on the watch, reports the chat's state, scrolls it with the bezel.",
+  "browser_specific_settings": {
+    "gecko": { "id": "claude@albustech.com" }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "geckoViewAddons",
+    "tabs",
+    "https://claude.ai/*"
+  ],
+  "background": { "scripts": ["background.js"] },
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["claude.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

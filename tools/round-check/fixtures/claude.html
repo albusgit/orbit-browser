@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+  A stand-in for claude.ai's chat page, shaped like the parts claude.js relies on: a
+  conversation that scrolls inside a div, and a fieldset message box with a ProseMirror
+  editor, a send button that is disabled while the box is empty, and a stop button while
+  "Claude" answers. ?broken makes the send button do nothing (markup claude.js doesn't know).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tides - Claude</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #262624; color: #eee; font: 15px/1.4 sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #scroller { flex: 1; overflow-y: auto; padding: 8px; }
+  .msg { margin: 0 0 12px; }
+  fieldset { border: 1px solid #555; margin: 6px; padding: 6px; display: flex; gap: 4px; }
+  .ProseMirror { flex: 1; min-height: 24px; outline: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="scroller"></div>
+  <fieldset>
+    <div class="ProseMirror" contenteditable="true" role="textbox"></div>
+    <button aria-label="Send message" disabled>↑</button>
+  </fieldset>
+</div>
+<script>
+  const scroller = document.getElementById('scroller');
+  for (let i = 0; i < 30; i++) {
+    const p = document.createElement('p');
+    p.className = 'msg';
+    p.textContent = `Earlier message ${i}: the tide comes in twice a day.`;
+    scroller.appendChild(p);
+  }
+  const editor = document.querySelector('.ProseMirror');
+  const send = document.querySelector('button[aria-label="Send message"]');
+  const fieldset = document.querySelector('fieldset');
+  const broken = location.search.includes('broken');
+  editor.addEventListener('input', () => { send.disabled = !editor.textContent.trim(); });
+  send.addEventListener('click', () => {
+    if (broken) return;
+    const text = editor.textContent.trim();
+    if (!text) return;
+    const p = document.createElement('p');
+    p.className = 'msg user';
+    p.textContent = text;
+    scroller.appendChild(p);
+    editor.textContent = '';
+    send.disabled = true;
+    // "Claude" answers for a moment, with a stop button.
+    const stop = document.createElement('button');
+    stop.setAttribute('aria-label', 'Stop response');
+    stop.textContent = '■';
+    stop.addEventListener('click', () => { stop.remove(); window.__stopped = true; });
+    fieldset.appendChild(stop);
+    setTimeout(() => stop.remove(), 1200);
+  });
+</script>
+</body>
+</html>

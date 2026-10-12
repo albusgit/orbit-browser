@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Claude</string>
+
+    <string name="action_speak">Speak</string>
+    <string name="action_type">Type</string>
+    <string name="action_stop">Stop</string>
+    <string name="action_menu">Menu</string>
+    <string name="action_close">Close</string>
+    <string name="action_retry">Retry</string>
+
+    <string name="menu_new_chat">New chat</string>
+    <string name="menu_chats">Chats</string>
+    <string name="menu_reload">Reload</string>
+    <string name="menu_open_on_phone">Open on phone</string>
+    <string name="menu_sign_out">Sign out</string>
+
+    <string name="voice_prompt">Ask Claude</string>
+    <string name="keyboard_label">Message Claude</string>
+    <string name="no_speech">No voice input on this watch</string>
+    <string name="send_failed">Couldn\'t send. Type in the page instead.</string>
+    <string name="phone_unavailable">Phone not connected</string>
+    <string name="opened_on_phone">Opened on phone</string>
+
+    <string name="error_engine">The browser engine couldn\'t start.</string>
+    <string name="error_load">Couldn\'t reach claude.ai.</string>
+</resources>

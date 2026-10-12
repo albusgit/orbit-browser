@@ -277,6 +277,84 @@ third_party/ublock/ uBlock Origin XPI (signed, from addons.mozilla.org), README,
 
 ---
 
+## Orbit for Claude (`claude/`)
+
+A second app in this repo, built on the same GeckoView engine: **claude.ai on the watch, signed
+in with your own Claude account** (your plan, your chats; no API key). It is a separate APK
+(`com.albustech.orbit.claude`, label "Claude") with its own Gecko profile, so its cookies and
+sign-in are separate from Orbit's.
+
+**Status: builds (debug and minified release), unit tests, lint and the headless page-script
+checks pass. It has not run on a watch yet**, so the sign-in flow and claude.ai's live markup
+are unverified on Gecko. See [Known gaps](#known-gaps).
+
+### Signing in
+
+claude.ai's own sign-in page, in the watch's GeckoView:
+
+- **Continue with Google** opens Google's sign-in as a real popup window over the chat: its site
+  (`accounts.google.com`) and a close button sit at the top. When Google is done it closes the
+  window itself and claude.ai, still the opener, finishes the sign-in. Orbit's browser turns
+  popups into same-window loads, which breaks this flow; this app gives each new-window request
+  a real second GeckoSession (`onNewSession`) and closes it on `window.close()`
+  (`onCloseRequest`). A redirect-style sign-in that ends on claude.ai inside the popup is handed
+  back to the chat window.
+- **Email**: type the address, then the code from the email, with the watch keyboard.
+- Gecko sends Firefox for Android's own user agent, which Google's sign-in accepts. Embedded
+  Android WebViews are the ones it refuses.
+- The sign-in stays in the app's Gecko profile across launches. **Menu → Sign out** goes to
+  claude.ai's sign-out.
+
+### The interface layer
+
+claude.ai fills the circle and the app's own controls sit over it:
+
+- **In a chat**, claude.ai's message box is replaced by three round buttons along the bottom edge:
+  - **Type** opens the watch keyboard.
+  - **Speak** opens voice input. While Claude answers, this button becomes **Stop**.
+  - **Menu** has New chat, Chats (claude.ai's list), Reload, Open on phone and Sign out.
+
+  The text you give goes into claude.ai's real message box and is sent from there. The box is
+  moved off screen, not removed. The conversation is padded so its last lines clear the buttons.
+- **The bezel** scrolls the conversation. claude.ai scrolls it inside a div, which Gecko's
+  pan/zoom can't reach, so `claude.js` scrolls that div. There is a tick per click and a bump at
+  the ends.
+- **While Claude answers**, an arc runs round the rim and the screen stays on. A haptic tap
+  says the answer is in.
+- **Links in answers** that open a new window show in the same popup layer, with a close button.
+- **If a send doesn't go through**, for example because claude.ai changed its markup, the app
+  says so and claude.ai's own message box comes back, so you can type in the page.
+- Sign-in pages get no buttons, so nothing covers the form.
+
+### How it's wired
+
+| Piece | Role |
+|---|---|
+| `ClaudeController` | The chat's GeckoSession and at most one popup session. Navigation rules, sign-in hand-back, bezel routing. |
+| `assets/extensions/claude/claude.js` | Content script on `claude.ai` (main frame, not in popups). Finds the message box, send and stop buttons with fallback selectors. Sends, stops, scrolls, and reports `{composer, busy, native}`. |
+| `background.js` ⇄ `ClaudeBridge` | Native port `claude` between the app and `claude.js`, the same pattern as Orbit's extension. |
+| `ui/ClaudeScreen.kt` | The buttons, popup layer, rim arc, menu and error pane, in Compose over the GeckoView. |
+
+`ClaudeUrls` holds the URL rules: what counts as a chat, a sign-in page, or a finished popup.
+`ClaudeUrlsTest` tests them.
+
+```sh
+./gradlew :claude:assembleDebug :claude:testDebugUnitTest :claude:lintDebug
+./gradlew :claude:installDebug        # on the watch (see "The real watch" below)
+cd tools/round-check && node claude-check.mjs
+```
+
+### Known gaps
+
+- Not yet run on a watch: Google's popup sign-in and `claude.js` against today's claude.ai
+  markup are the first things to check. The page script's selectors are listed at the top of
+  `claude.js`.
+- claude.ai's own page header (menu, model picker) is left as claude.ai draws it at about 240
+  CSS px wide.
+- Voice mode, file uploads and artifacts are claude.ai's page features. They are untested on the watch.
+- The APK is about 81 MiB, the same as Orbit's, because it carries its own Gecko. The two apps
+  can't share one engine install.
+
 ## Building
 
 You need JDK 17 or later and an Android SDK with `platforms;android-37.2`, because GeckoView 157 compiles against API 37.1 or later. Gradle fetches GeckoView from `maven.mozilla.org`.
@@ -318,6 +396,7 @@ node reader-check.mjs   # Reader: every word inside the circle, images in the sq
                         #   position kept across re-pagination, timing with CPU throttled 6×
 node links-check.mjs    # Link focus: reading order, scroll/page continuation, back, activate
 node serp-check.mjs     # Search results: Google/DDG/Bing fixtures + live Bing (--no-live to skip)
+node claude-check.mjs   # Orbit for Claude: send, stop, busy, bezel scroll, fallback, popups left alone
 node --test extension.test.mjs   # the extension's background.js and bridge.js, with a fake browser API
 ```
 
