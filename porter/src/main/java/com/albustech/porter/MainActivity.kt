@@ -63,7 +63,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -187,7 +189,11 @@ internal fun PorterScreen(porter: Porter) {
                     ) { Text("Start port", fontSize = 16.sp) }
                 }
                 if (state.message.isNotEmpty()) {
-                    Text(state.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        state.message, style = MaterialTheme.typography.bodySmall,
+                        color = if (state.phase == Phase.Reconnecting) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 if (!running) {
                     TextButton(onClick = { porter.discover() }, modifier = Modifier.align(Alignment.End)) { Text("Find watch") }
@@ -268,7 +274,12 @@ internal fun PorterScreen(porter: Porter) {
 
             if (state.log.isNotEmpty()) {
                 Section {
-                    Text("Log", style = MaterialTheme.typography.titleSmall)
+                    val clipboard = LocalClipboardManager.current
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Log", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(porter.report())) }) { Text("Copy log") }
+                    }
                     Text(
                         state.log.takeLast(8).joinToString("\n"),
                         fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 16.sp,
@@ -286,8 +297,9 @@ private fun PairForm(host: String, pairing: Boolean, status: String, onPair: (St
     var code by remember { mutableStateOf("") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
-            "Only needed once. On the watch, open Wireless debugging → Pair new device, then enter the " +
-                "pairing port and code it shows (the IP above stays the same).",
+            "Only needed once. Keep the watch's screen on. On the watch, open Wireless debugging → Pair " +
+                "new device, then enter the pairing port and code it shows (the IP above stays the same). " +
+                "Leave that screen open until Porter says Paired.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

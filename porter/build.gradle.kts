@@ -16,8 +16,8 @@ android {
         minSdk = 26
         // 36, not 37: Android 17 puts LAN sockets behind a runtime permission for apps targeting it.
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
         // Conscrypt and SPAKE2 ship native code: phones only need the ARM builds.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
@@ -42,7 +42,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     testOptions {
         unitTests {

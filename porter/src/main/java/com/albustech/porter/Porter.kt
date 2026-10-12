@@ -5,7 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
-import io.github.muntashirakon.adb.AdbPairingRequiredException
+import android.util.Log
 import io.github.muntashirakon.adb.android.AdbMdns
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withTimeout
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -119,7 +120,13 @@ class Porter(private val context: Context) {
             setPhase(if (first) Phase.Connecting else Phase.Reconnecting, "Connecting to ${s.host}:${s.port}…")
             val conn = WatchAdb(keys)
             try {
-                if (!conn.connect(s.host, s.port)) throw IllegalStateException("The watch didn't accept the connection")
+                Diagnose.probe(s.host, s.port, "Wireless debugging")
+                if (!conn.connect(s.host, s.port)) {
+                    throw IOException(
+                        "Connected to ${s.host}:${s.port}, but the watch didn't finish ADB's handshake. If it asked " +
+                            "\"Allow debugging?\", tap Allow (and Always allow). Otherwise turn Wireless debugging off and on.",
+                    )
+                }
                 adb = conn
                 prefs.paired = true
                 log("Connected to ${s.host}:${s.port}")
@@ -135,17 +142,14 @@ class Porter(private val context: Context) {
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
-            } catch (e: AdbPairingRequiredException) {
-                closeAdb()
-                runCatching { conn.close() }
-                setPhase(Phase.Reconnecting, "Pair this phone first (see Pair below)")
-                log("Not paired with ${s.host}")
             } catch (e: Throwable) {
+                val hidden = Diagnose.hiddenCause(conn)
                 closeAdb()
                 runCatching { conn.close() }
-                val why = e.message ?: e.javaClass.simpleName
-                setPhase(Phase.Reconnecting, "Lost the watch: $why. Retrying…")
-                log("Connection: $why")
+                val why = Diagnose.connectFailure(e, hidden)
+                setPhase(Phase.Reconnecting, "$why Retrying…")
+                log(if (first) "Can't connect: $why" else "Connection lost: $why")
+                Log.w(TAG, "connect ${s.host}:${s.port}", hidden ?: e)
             }
             delay(wait)
             wait = (wait * 2).coerceAtMost(15_000L)
@@ -194,12 +198,14 @@ class Porter(private val context: Context) {
         // Off the main thread: the handshake is blocking network I/O.
         scope.launch {
             val result = try {
+                Diagnose.probe(host, pairingPort, "Pair new device")
                 val ok = WatchAdb(keys).use { it.pair(host, pairingPort, code) }
                 if (ok) prefs.paired = true
                 if (ok) "Paired. Now tap Start port (it uses the other port, on the main Wireless debugging screen)."
                 else "The watch turned the pairing down. Check the code and try again."
             } catch (e: Throwable) {
-                pairingError(e, host, pairingPort)
+                Log.w(TAG, "pair $host:$pairingPort", e)
+                Diagnose.pairFailure(e)
             }
             log(result)
             setPair(false, result)
@@ -207,20 +213,6 @@ class Porter(private val context: Context) {
     }
 
     private fun setPair(running: Boolean, status: String) = _state.update { it.copy(pairing = running, pairStatus = status) }
-
-    private fun pairingError(e: Throwable, host: String, port: Int): String {
-        val root = generateSequence(e) { it.cause }.last()
-        return when (root) {
-            is java.net.ConnectException, is java.net.NoRouteToHostException ->
-                "Couldn't reach $host:$port. Keep the watch's Pair new device screen open, and use the " +
-                    "pairing port shown there (not the main Wireless debugging port)."
-            is java.net.SocketTimeoutException -> "$host:$port didn't answer. Are the phone and watch on the same Wi-Fi?"
-            is java.io.EOFException, is javax.net.ssl.SSLException ->
-                "The watch ended the pairing. The code is probably wrong or expired: open Pair new device again for a new one."
-            else -> "Pairing failed: " + generateSequence(e) { it.cause }
-                .joinToString(" ← ") { it.message ?: it.javaClass.simpleName }
-        }
-    }
 
     /** Fills in host and port from the watch's Wireless debugging announcement (same Wi-Fi). */
     fun discover() {
@@ -414,10 +406,29 @@ class Porter(private val context: Context) {
 
     fun log(line: String) {
         val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        _state.update { it.copy(log = (it.log + "$stamp  $line").takeLast(50)) }
+        _state.update {
+            // A retry loop says the same thing every few seconds: keep one line, with the latest time.
+            val last = it.log.lastOrNull()
+            val log = if (last != null && last.substringAfter("  ") == line) it.log.dropLast(1) else it.log
+            it.copy(log = (log + "$stamp  $line").takeLast(50))
+        }
+    }
+
+    /** Everything useful for working out a problem, for pasting into a message. */
+    fun report(): String {
+        val s = _state.value
+        return buildString {
+            appendLine("Porter ${BuildConfig.VERSION_NAME} on Android ${android.os.Build.VERSION.RELEASE} (${android.os.Build.MODEL})")
+            appendLine("Watch ${s.host}:${s.port}, ${s.phase}, paired before: ${prefs.paired}")
+            if (s.message.isNotEmpty()) appendLine(s.message)
+            if (s.pairStatus.isNotEmpty()) appendLine("Pairing: ${s.pairStatus}")
+            s.log.forEach { appendLine(it) }
+        }
     }
 
     companion object {
+        private const val TAG = "Porter"
+
         fun formatMs(ms: Int): String = when {
             ms >= 60_000 && ms % 60_000 == 0 -> "${ms / 60_000} min"
             else -> "${ms / 1000} s"

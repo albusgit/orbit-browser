@@ -16,7 +16,8 @@ class WatchAdb(private val keys: AdbKeys) : AbsAdbConnectionManager() {
     init {
         // Wireless debugging is Android 11+ and always TLS.
         api = maxOf(Build.VERSION.SDK_INT, Build.VERSION_CODES.R)
-        setTimeout(10, TimeUnit.SECONDS)
+        // Long enough to tap Allow if the watch asks.
+        setTimeout(30, TimeUnit.SECONDS)
     }
 
     override fun getPrivateKey(): PrivateKey = keys.privateKey
